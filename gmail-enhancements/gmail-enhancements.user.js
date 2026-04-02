@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.5.4
+// @version      1.5.5
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
@@ -225,7 +225,8 @@
 
     for (const region of complementaryRegions) {
       const text = region.textContent || '';
-      if (text.includes('TASKS') || text.includes('Add a task') || text.includes("'s list")) {
+      const lower = text.toLowerCase();
+      if (lower.includes('tasks') || lower.includes('add a task') || text.includes("'s list")) {
         log('Found Tasks panel in complementary region');
         return region;
       }
@@ -234,7 +235,7 @@
     // Try finding by looking for the Tasks header directly
     const tasksHeaders = document.querySelectorAll('div, span, h2');
     for (const el of tasksHeaders) {
-      if (el.textContent?.trim() === 'TASKS' || el.textContent?.trim() === 'Tasks') {
+      if (el.textContent?.trim().toLowerCase() === 'tasks') {
         // Found the header, get its container panel
         const panel = el.closest('[role="complementary"]') ||
                       el.closest('[data-panel-id]') ||
@@ -251,7 +252,8 @@
     const rightPanels = document.querySelectorAll('.bq9, .brC-brG');
     for (const panel of rightPanels) {
       const text = panel.textContent || '';
-      if (text.includes('TASKS') || text.includes('Add a task')) {
+      const lower = text.toLowerCase();
+      if (lower.includes('tasks') || lower.includes('add a task')) {
         log('Found Tasks panel via class selector');
         return panel;
       }
