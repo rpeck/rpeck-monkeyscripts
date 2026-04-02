@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.5.2
+// @version      1.5.3
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/rpeck/rpeck-monkeyscripts/main/gmail-enhancements/gmail-enhancements.user.js
+// @downloadURL  https://raw.githubusercontent.com/rpeck/rpeck-monkeyscripts/main/gmail-enhancements/gmail-enhancements.user.js
 // ==/UserScript==
 
 (function () {
