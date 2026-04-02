@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.4.3
+// @version      1.5.0
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
@@ -210,6 +210,7 @@
 
   let cachedTasks = [];
   let tasksObserver = null;
+  let tasksPanelObserver = null;
 
   /**
    * Find the Tasks sidebar panel
@@ -424,25 +425,58 @@
   }
 
   /**
+   * Set up observer on Tasks panel to detect when tasks load
+   */
+  function setupTasksPanelObserver() {
+    const tasksPanel = findTasksPanel();
+    if (!tasksPanel) return;
+
+    // Disconnect existing observer if any
+    if (tasksPanelObserver) {
+      tasksPanelObserver.disconnect();
+    }
+
+    tasksPanelObserver = new MutationObserver((mutations) => {
+      // Debounce - wait for DOM to settle
+      clearTimeout(tasksPanelObserver.debounceTimer);
+      tasksPanelObserver.debounceTimer = setTimeout(() => {
+        log('Tasks panel content changed, re-highlighting...');
+        highlightMatchingEmails();
+      }, 300);
+    });
+
+    tasksPanelObserver.observe(tasksPanel, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+
+    log('Tasks panel observer set up');
+  }
+
+  /**
    * Apply red highlighting to emails that match tasks
    */
-  function highlightMatchingEmails(retryCount = 0) {
-    log('highlightMatchingEmails: Starting... (retry:', retryCount, ')');
+  function highlightMatchingEmails() {
+    log('highlightMatchingEmails: Starting...');
 
-    const sidebarOpen = isTasksSidebarOpen();
-    log('highlightMatchingEmails: Sidebar open?', sidebarOpen);
-    if (!sidebarOpen) return;
+    const tasksPanel = findTasksPanel();
+    if (!tasksPanel) {
+      log('highlightMatchingEmails: No Tasks panel');
+      return;
+    }
 
-    // Extract tasks (use cache if available and fresh)
+    // Set up observer if not already watching this panel
+    if (!tasksPanelObserver) {
+      setupTasksPanelObserver();
+    }
+
+    // Extract tasks
     const tasks = extractTaskTitles();
     log('highlightMatchingEmails: Got', tasks.length, 'tasks');
 
-    // If tasks are still loading, retry after a delay (max 5 retries)
-    if (tasks.length === 0 || (tasks.length === 1 && tasks[0] === 'Loading...')) {
-      if (retryCount < 5) {
-        log('highlightMatchingEmails: Tasks still loading, retrying in 500ms...');
-        setTimeout(() => highlightMatchingEmails(retryCount + 1), 500);
-      }
+    // If no real tasks yet (still loading), observer will catch when they load
+    if (tasks.length === 0) {
       return;
     }
 
