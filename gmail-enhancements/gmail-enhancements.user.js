@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.4.0
+// @version      1.4.1
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
@@ -212,20 +212,60 @@
   let tasksObserver = null;
 
   /**
+   * Find the Tasks sidebar panel
+   */
+  function findTasksPanel() {
+    // Gmail's Tasks panel is in an iframe or a specific panel structure
+    // Look for multiple complementary regions and find the one with Tasks
+    const complementaryRegions = document.querySelectorAll('[role="complementary"]');
+    log('Found', complementaryRegions.length, 'complementary regions');
+
+    for (const region of complementaryRegions) {
+      const text = region.textContent || '';
+      if (text.includes('TASKS') || text.includes('Add a task') || text.includes("'s list")) {
+        log('Found Tasks panel in complementary region');
+        return region;
+      }
+    }
+
+    // Try finding by looking for the Tasks header directly
+    const tasksHeaders = document.querySelectorAll('div, span, h2');
+    for (const el of tasksHeaders) {
+      if (el.textContent?.trim() === 'TASKS' || el.textContent?.trim() === 'Tasks') {
+        // Found the header, get its container panel
+        const panel = el.closest('[role="complementary"]') ||
+                      el.closest('[data-panel-id]') ||
+                      el.closest('aside') ||
+                      el.parentElement?.parentElement?.parentElement;
+        if (panel) {
+          log('Found Tasks panel via header');
+          return panel;
+        }
+      }
+    }
+
+    // Try finding the right-side panel area
+    const rightPanels = document.querySelectorAll('.bq9, .brC-brG');
+    for (const panel of rightPanels) {
+      const text = panel.textContent || '';
+      if (text.includes('TASKS') || text.includes('Add a task')) {
+        log('Found Tasks panel via class selector');
+        return panel;
+      }
+    }
+
+    log('Tasks panel not found');
+    return null;
+  }
+
+  /**
    * Check if Tasks sidebar is currently open
    */
   function isTasksSidebarOpen() {
-    // Look for the Tasks panel - it has "Tasks" header (case may vary)
-    const complementary = document.querySelector('[role="complementary"]');
-    if (!complementary) {
-      log('No complementary region found');
-      return false;
-    }
-    // Check if it contains task-related content
-    const text = complementary.textContent || '';
-    const hasTasksContent = text.includes('Tasks') || text.includes('TASKS') || text.includes('Add a task');
-    log('Tasks sidebar check:', hasTasksContent, 'Content preview:', text.substring(0, 100));
-    return hasTasksContent;
+    const panel = findTasksPanel();
+    const isOpen = !!panel;
+    log('Tasks sidebar check:', isOpen);
+    return isOpen;
   }
 
   /**
@@ -264,17 +304,17 @@
     const tasks = [];
 
     // Find the Tasks panel
-    const complementary = document.querySelector('[role="complementary"]');
-    if (!complementary) {
-      log('extractTaskTitles: No complementary region');
+    const tasksPanel = findTasksPanel();
+    if (!tasksPanel) {
+      log('extractTaskTitles: No Tasks panel found');
       return tasks;
     }
 
-    log('extractTaskTitles: Found complementary region');
+    log('extractTaskTitles: Found Tasks panel');
 
     // Look for task items - they're typically in a list structure
     // Task titles are usually in contenteditable divs or specific spans
-    const taskElements = complementary.querySelectorAll(
+    const taskElements = tasksPanel.querySelectorAll(
       '[role="listitem"], [data-id], .taskItem, [contenteditable="true"]'
     );
 
@@ -291,7 +331,7 @@
     // Tasks panel has specific structure - look for the task list container
     if (tasks.length === 0) {
       log('extractTaskTitles: Trying fallback text extraction');
-      const allText = complementary.querySelectorAll('div, span');
+      const allText = tasksPanel.querySelectorAll('div, span');
       const seenTexts = new Set();
 
       allText.forEach(el => {
