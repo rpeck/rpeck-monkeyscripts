@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.4.1
+// @version      1.4.2
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
@@ -331,22 +331,35 @@
     // Tasks panel has specific structure - look for the task list container
     if (tasks.length === 0) {
       log('extractTaskTitles: Trying fallback text extraction');
-      const allText = tasksPanel.querySelectorAll('div, span');
-      const seenTexts = new Set();
 
-      allText.forEach(el => {
-        const text = el.textContent?.trim();
-        // Filter out UI elements and duplicates
-        if (text &&
-            text.length > 2 &&
-            text.length < 200 &&
-            !seenTexts.has(text) &&
-            !text.toLowerCase().includes('tasks') &&
-            !text.includes('Add a task') &&
-            !text.includes("list") &&
-            el.children.length === 0) { // Leaf nodes only
-          seenTexts.add(text);
-          tasks.push(text);
+      // First, log ALL leaf text nodes to understand the structure
+      const allElements = tasksPanel.querySelectorAll('*');
+      const leafTexts = [];
+      allElements.forEach(el => {
+        if (el.children.length === 0) {
+          const text = el.textContent?.trim();
+          if (text && text.length > 0) {
+            leafTexts.push(text);
+          }
+        }
+      });
+      log('extractTaskTitles: All leaf texts in panel:', leafTexts);
+
+      // Now extract tasks - filter out known UI elements
+      const seenTexts = new Set();
+      const uiPatterns = ['TASKS', 'Tasks', 'Add a task', 'Raymond', 'list', 'Details', 'Delete', 'More actions'];
+
+      allElements.forEach(el => {
+        if (el.children.length === 0) {
+          const text = el.textContent?.trim();
+          if (text &&
+              text.length > 5 &&
+              text.length < 300 &&
+              !seenTexts.has(text) &&
+              !uiPatterns.some(p => text === p || text.startsWith(p + "'s"))) {
+            seenTexts.add(text);
+            tasks.push(text);
+          }
         }
       });
     }
