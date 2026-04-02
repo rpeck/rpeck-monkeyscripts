@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.4.2
+// @version      1.4.3
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
@@ -347,7 +347,7 @@
 
       // Now extract tasks - filter out known UI elements
       const seenTexts = new Set();
-      const uiPatterns = ['TASKS', 'Tasks', 'Add a task', 'Raymond', 'list', 'Details', 'Delete', 'More actions'];
+      const uiPatterns = ['TASKS', 'Tasks', 'Add a task', 'Raymond', 'list', 'Details', 'Delete', 'More actions', 'Loading', 'Loading...'];
 
       allElements.forEach(el => {
         if (el.children.length === 0) {
@@ -426,8 +426,8 @@
   /**
    * Apply red highlighting to emails that match tasks
    */
-  function highlightMatchingEmails() {
-    log('highlightMatchingEmails: Starting...');
+  function highlightMatchingEmails(retryCount = 0) {
+    log('highlightMatchingEmails: Starting... (retry:', retryCount, ')');
 
     const sidebarOpen = isTasksSidebarOpen();
     log('highlightMatchingEmails: Sidebar open?', sidebarOpen);
@@ -436,7 +436,15 @@
     // Extract tasks (use cache if available and fresh)
     const tasks = extractTaskTitles();
     log('highlightMatchingEmails: Got', tasks.length, 'tasks');
-    if (tasks.length === 0) return;
+
+    // If tasks are still loading, retry after a delay (max 5 retries)
+    if (tasks.length === 0 || (tasks.length === 1 && tasks[0] === 'Loading...')) {
+      if (retryCount < 5) {
+        log('highlightMatchingEmails: Tasks still loading, retrying in 500ms...');
+        setTimeout(() => highlightMatchingEmails(retryCount + 1), 500);
+      }
+      return;
+    }
 
     cachedTasks = tasks;
 
