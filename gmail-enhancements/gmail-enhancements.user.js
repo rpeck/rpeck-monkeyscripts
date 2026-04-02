@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.5.1
+// @version      1.5.2
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
@@ -304,37 +304,25 @@
   function extractTaskTitles() {
     const tasks = [];
 
-    // Find the Tasks panel
-    const tasksPanel = findTasksPanel();
-    if (!tasksPanel) {
-      log('extractTaskTitles: No Tasks panel found');
-      return tasks;
-    }
+    // Search ALL complementary regions for task content
+    const complementaryRegions = document.querySelectorAll('[role="complementary"]');
+    log('extractTaskTitles: Searching', complementaryRegions.length, 'complementary regions');
 
-    log('extractTaskTitles: Found Tasks panel');
+    for (const region of complementaryRegions) {
+      const regionText = region.textContent || '';
 
-    // Look for task items - they're typically in a list structure
-    // Task titles are usually in contenteditable divs or specific spans
-    const taskElements = tasksPanel.querySelectorAll(
-      '[role="listitem"], [data-id], .taskItem, [contenteditable="true"]'
-    );
-
-    log('extractTaskTitles: Found', taskElements.length, 'potential task elements');
-
-    taskElements.forEach(el => {
-      const text = el.textContent?.trim();
-      if (text && text.length > 0 && text !== 'Add a task') {
-        tasks.push(text);
+      // Skip regions that don't look like Tasks panel
+      if (!regionText.includes('TASKS') && !regionText.includes('Add a task')) {
+        continue;
       }
-    });
 
-    // Alternative: find all text content that looks like task titles
-    // Tasks panel has specific structure - look for the task list container
-    if (tasks.length === 0) {
-      log('extractTaskTitles: Trying fallback text extraction');
+      log('extractTaskTitles: Found Tasks region, scanning for task items...');
 
-      // First, log ALL leaf text nodes to understand the structure
-      const allElements = tasksPanel.querySelectorAll('*');
+      // Look for all potential task text in this region
+      const allElements = region.querySelectorAll('*');
+      const seenTexts = new Set();
+
+      // First log all leaf texts for debugging
       const leafTexts = [];
       allElements.forEach(el => {
         if (el.children.length === 0) {
@@ -344,16 +332,14 @@
           }
         }
       });
-      log('extractTaskTitles: All leaf texts in panel:', leafTexts);
+      log('extractTaskTitles: All leaf texts:', leafTexts);
 
-      // Now extract tasks - filter out known UI elements
-      const seenTexts = new Set();
-
+      // Extract tasks
       allElements.forEach(el => {
         if (el.children.length === 0) {
           const text = el.textContent?.trim();
           if (text &&
-              text.length > 5 &&
+              text.length > 10 &&  // Real tasks are usually longer
               text.length < 300 &&
               !seenTexts.has(text) &&
               !isUIText(text)) {
@@ -362,6 +348,8 @@
           }
         }
       });
+
+      if (tasks.length > 0) break;
     }
 
     log('extractTaskTitles: Extracted tasks:', tasks);
@@ -436,12 +424,9 @@
   }
 
   /**
-   * Set up observer on Tasks panel to detect when tasks load
+   * Set up observer on ALL complementary regions to detect when tasks load
    */
   function setupTasksPanelObserver() {
-    const tasksPanel = findTasksPanel();
-    if (!tasksPanel) return;
-
     // Disconnect existing observer if any
     if (tasksPanelObserver) {
       tasksPanelObserver.disconnect();
@@ -451,18 +436,22 @@
       // Debounce - wait for DOM to settle
       clearTimeout(tasksPanelObserver.debounceTimer);
       tasksPanelObserver.debounceTimer = setTimeout(() => {
-        log('Tasks panel content changed, re-highlighting...');
+        log('Complementary region changed, re-highlighting...');
         highlightMatchingEmails();
       }, 300);
     });
 
-    tasksPanelObserver.observe(tasksPanel, {
-      childList: true,
-      subtree: true,
-      characterData: true
+    // Observe ALL complementary regions
+    const regions = document.querySelectorAll('[role="complementary"]');
+    regions.forEach(region => {
+      tasksPanelObserver.observe(region, {
+        childList: true,
+        subtree: true,
+        characterData: true
+      });
     });
 
-    log('Tasks panel observer set up');
+    log('Tasks panel observer set up on', regions.length, 'regions');
   }
 
   /**
@@ -471,15 +460,15 @@
   function highlightMatchingEmails() {
     log('highlightMatchingEmails: Starting...');
 
-    const tasksPanel = findTasksPanel();
-    if (!tasksPanel) {
-      log('highlightMatchingEmails: No Tasks panel');
-      return;
-    }
-
-    // Set up observer if not already watching this panel
+    // Set up observer if not already set
     if (!tasksPanelObserver) {
       setupTasksPanelObserver();
+    }
+
+    // Check if Tasks sidebar is open
+    if (!isTasksSidebarOpen()) {
+      log('highlightMatchingEmails: Tasks sidebar not open');
+      return;
     }
 
     // Extract tasks
