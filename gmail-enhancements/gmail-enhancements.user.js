@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.5.3
+// @version      1.5.4
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
@@ -312,9 +312,13 @@
 
     for (const region of complementaryRegions) {
       const regionText = region.textContent || '';
+      const regionLower = regionText.toLowerCase();
 
-      // Skip regions that don't look like Tasks panel
-      if (!regionText.includes('TASKS') && !regionText.includes('Add a task')) {
+      log('extractTaskTitles: Region preview:', regionText.substring(0, 80));
+
+      // Skip regions that don't look like Tasks panel (case insensitive)
+      if (!regionLower.includes('tasks') && !regionLower.includes('add a task')) {
+        log('extractTaskTitles: Skipping region - no tasks content');
         continue;
       }
 
