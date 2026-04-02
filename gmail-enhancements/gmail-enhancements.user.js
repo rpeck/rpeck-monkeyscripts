@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.5.0
+// @version      1.5.1
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
@@ -348,7 +348,6 @@
 
       // Now extract tasks - filter out known UI elements
       const seenTexts = new Set();
-      const uiPatterns = ['TASKS', 'Tasks', 'Add a task', 'Raymond', 'list', 'Details', 'Delete', 'More actions', 'Loading', 'Loading...'];
 
       allElements.forEach(el => {
         if (el.children.length === 0) {
@@ -357,7 +356,7 @@
               text.length > 5 &&
               text.length < 300 &&
               !seenTexts.has(text) &&
-              !uiPatterns.some(p => text === p || text.startsWith(p + "'s"))) {
+              !isUIText(text)) {
             seenTexts.add(text);
             tasks.push(text);
           }
@@ -367,6 +366,18 @@
 
     log('extractTaskTitles: Extracted tasks:', tasks);
     return tasks;
+  }
+
+  /**
+   * Check if text is a UI element rather than a task
+   */
+  function isUIText(text) {
+    const lower = text.toLowerCase();
+    const uiPatterns = [
+      'tasks', 'add a task', 'loading', 'details', 'delete',
+      'more actions', 'my tasks', "'s list", 'starred'
+    ];
+    return uiPatterns.some(p => lower === p || lower.includes(p));
   }
 
   /**
