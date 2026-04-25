@@ -8,6 +8,8 @@
 // @match        https://www.linkedin.com/feed/update/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://github.com/rpeck/rpeck-monkeyscripts/raw/main/linkedin-post-titles/linkedin-post-titles.user.js
+// @downloadURL  https://github.com/rpeck/rpeck-monkeyscripts/raw/main/linkedin-post-titles/linkedin-post-titles.user.js
 // ==/UserScript==
 
 (function () {
