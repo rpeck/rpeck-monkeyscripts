@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Post Titles
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.0.0
+// @version      1.1.0
 // @description  Replaces generic LinkedIn post tab titles with meaningful ones: "LinkedIn Post - Author - Topic"
 // @author       rpeck
 // @match        https://www.linkedin.com/posts/*
@@ -15,6 +15,10 @@
 
   const MAX_TOPIC_LENGTH = 80;
   const TITLE_PREFIX = 'LinkedIn Post';
+
+  // Cache the computed title so we can cheaply re-apply it when a
+  // sleeping/discarded tab is restored by the browser or a tab manager.
+  let cachedTitle = null;
 
   /**
    * Extract JSON-LD structured data from the page
@@ -183,11 +187,22 @@
 
     // Only update if we have meaningful content
     if (author || topic) {
+      cachedTitle = newTitle;
       document.title = newTitle;
       return true;
     }
 
     return false;
+  }
+
+  /**
+   * Re-apply the cached title if the browser reset it (e.g. after tab
+   * sleep/discard by Edge, Workona, or similar tab managers).
+   */
+  function reapplyTitle() {
+    if (cachedTitle && document.title !== cachedTitle) {
+      document.title = cachedTitle;
+    }
   }
 
   /**
@@ -221,6 +236,21 @@
       updateTitle(); // One final attempt
     }, 10000);
   }
+
+  // Re-apply title when a sleeping/discarded tab is restored.
+  // "visibilitychange" fires when Edge or a tab manager (Workona, etc.)
+  // wakes a backgrounded tab.  "pageshow" with persisted=true fires when
+  // the page is restored from bfcache.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      reapplyTitle();
+    }
+  });
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) {
+      reapplyTitle();
+    }
+  });
 
   // Run when DOM is ready
   if (document.readyState === 'loading') {
