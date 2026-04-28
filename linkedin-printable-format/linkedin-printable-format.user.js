@@ -7,8 +7,8 @@
 // @match        https://www.linkedin.com/in/*/details/*
 // @icon         https://www.linkedin.com/favicon.ico
 // @grant        none
-// @downloadURL  https://raw.githubusercontent.com/rpeck/rpeck-monkeyscripts/main/linkedin-printable-format/linkedin-printable-format.js
-// @updateURL    https://raw.githubusercontent.com/rpeck/rpeck-monkeyscripts/main/linkedin-printable-format/linkedin-printable-format.js
+// @downloadURL  https://raw.githubusercontent.com/rpeck/rpeck-monkeyscripts/main/linkedin-printable-format/linkedin-printable-format.user.js
+// @updateURL    https://raw.githubusercontent.com/rpeck/rpeck-monkeyscripts/main/linkedin-printable-format/linkedin-printable-format.user.js
 // @homepageURL  https://github.com/rpeck/rpeck-monkeyscripts/tree/main/linkedin-printable-format
 // @supportURL   https://github.com/rpeck/rpeck-monkeyscripts/issues
 // ==/UserScript==
