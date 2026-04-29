@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.1.0
+// @version      1.2.0
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -29,41 +29,62 @@
     style.id = STYLE_ID;
 
     style.textContent = `
+      body.${BODY_CLASS} {
+        background: #fff !important;
+        overflow: visible !important;
+      }
+
       body.${BODY_CLASS} header,
       body.${BODY_CLASS} aside,
       body.${BODY_CLASS} footer,
       body.${BODY_CLASS} nav,
       body.${BODY_CLASS} .global-nav,
+      body.${BODY_CLASS} .msg-overlay-container,
       body.${BODY_CLASS} .msg-overlay-list-bubble,
       body.${BODY_CLASS} .msg-overlay-bubble-header,
+      body.${BODY_CLASS} .msg-overlay-conversation-bubble,
       body.${BODY_CLASS} .scaffold-layout__aside,
       body.${BODY_CLASS} .scaffold-layout__sidebar,
       body.${BODY_CLASS} .scaffold-layout-toolbar,
       body.${BODY_CLASS} .artdeco-toast-item,
       body.${BODY_CLASS} .pvs-navigation,
-      body.${BODY_CLASS} .pv-profile-sticky-header {
+      body.${BODY_CLASS} .pv-profile-sticky-header,
+      body.${BODY_CLASS} .profile-language,
+      body.${BODY_CLASS} [aria-label="Profile language"],
+      body.${BODY_CLASS} [data-view-name="profile-card"],
+      body.${BODY_CLASS} .ad-banner-container,
+      body.${BODY_CLASS} .premium-upsell-link,
+      body.${BODY_CLASS} .right-rail,
+      body.${BODY_CLASS} .authentication-outlet > div > div:not(.scaffold-layout) {
         display: none !important;
       }
 
-      body.${BODY_CLASS},
-      body.${BODY_CLASS} main,
       body.${BODY_CLASS} .scaffold-layout,
-      body.${BODY_CLASS} .scaffold-layout__main {
-        background: white !important;
+      body.${BODY_CLASS} .scaffold-layout__inner,
+      body.${BODY_CLASS} .scaffold-layout__row,
+      body.${BODY_CLASS} .scaffold-layout__content,
+      body.${BODY_CLASS} .scaffold-layout__main,
+      body.${BODY_CLASS} main {
+        display: block !important;
+        grid-template-columns: 1fr !important;
         width: 100% !important;
         max-width: none !important;
+        min-width: 0 !important;
         margin: 0 !important;
         padding: 0 !important;
+        background: #fff !important;
         overflow: visible !important;
       }
 
-      body.${BODY_CLASS} main {
-        display: block !important;
+      body.${BODY_CLASS} .scaffold-layout__main,
+      body.${BODY_CLASS} main > section,
+      body.${BODY_CLASS} main .artdeco-card {
+        margin-left: auto !important;
+        margin-right: auto !important;
+        max-width: 850px !important;
       }
 
       body.${BODY_CLASS} .scaffold-layout__main {
-        margin: 0 auto !important;
-        max-width: 850px !important;
         padding: 24px !important;
       }
 
@@ -74,18 +95,23 @@
       body.${BODY_CLASS} .artdeco-card {
         box-shadow: none !important;
         border: none !important;
-        background: white !important;
+        background: #fff !important;
+      }
+
+      body.${BODY_CLASS} .artdeco-card {
+        border-radius: 0 !important;
       }
 
       body.${BODY_CLASS} .pvs-entity__action-container,
       body.${BODY_CLASS} .pvs-list__footer-wrapper,
       body.${BODY_CLASS} .social-details-social-counts,
-      body.${BODY_CLASS} .update-components-actor__sub-description {
+      body.${BODY_CLASS} .update-components-actor__sub-description,
+      body.${BODY_CLASS} button[aria-label^="Edit"],
+      body.${BODY_CLASS} button[aria-label*="add" i],
+      body.${BODY_CLASS} button[aria-label*="Add"],
+      body.${BODY_CLASS} button[aria-label*="reorder" i],
+      body.${BODY_CLASS} .pvs-list__item--with-top-padding > div > div:first-child:not(:only-child) {
         display: none !important;
-      }
-
-      body.${BODY_CLASS} .artdeco-card {
-        border-radius: 0 !important;
       }
 
       @media print {
@@ -161,15 +187,36 @@
     return (text || '')
       .replace(/\u00a0/g, ' ')
       .replace(/[ \t]+/g, ' ')
+      .replace(/\n[ \t]+/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
   }
 
-  function markdownFileNameFromPage() {
+  function getSectionName() {
     const pathParts = location.pathname.split('/').filter(Boolean);
-    const username = pathParts[1] || 'linkedin';
-    const section = pathParts[3] || 'details';
-    return `${username}-${section}.md`;
+    return pathParts[3] || 'details';
+  }
+
+  function getProfileSlug() {
+    const pathParts = location.pathname.split('/').filter(Boolean);
+    return pathParts[1] || 'linkedin';
+  }
+
+  function markdownFileNameFromPage() {
+    return `${getProfileSlug()}-${getSectionName()}.md`;
+  }
+
+  function headingFromPage() {
+    const explicitHeading = document.querySelector('.scaffold-layout__main h1, main h1');
+    const headingText = cleanText(explicitHeading?.innerText);
+    if (headingText) return headingText;
+
+    const section = getSectionName()
+      .replace(/-/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+
+    return section || 'LinkedIn Details';
   }
 
   function isHidden(el) {
@@ -182,47 +229,131 @@
       el.closest(`#${FORMAT_BUTTON_ID}`) ||
       el.closest(`#${RESET_BUTTON_ID}`) ||
       el.closest(`#${MARKDOWN_BUTTON_ID}`) ||
-      el.matches('script, style, noscript, svg, img, nav, aside, footer, header') ||
-      el.matches('.global-nav, .msg-overlay-list-bubble, .msg-overlay-bubble-header') ||
+      el.matches('script, style, noscript, svg, img, nav, aside, footer, header, button') ||
+      el.matches('.global-nav, .msg-overlay-container, .msg-overlay-list-bubble, .msg-overlay-bubble-header') ||
       el.matches('.pvs-entity__action-container, .pvs-list__footer-wrapper') ||
       isHidden(el)
     );
   }
 
-  function normalizeMarkdown(markdown) {
-    return markdown
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/\n\s*-\s*\n/g, '\n')
-      .trim() + '\n';
+  function textFromSelectors(root, selectors) {
+    for (const selector of selectors) {
+      const el = root.querySelector(selector);
+      const text = cleanText(el?.innerText);
+      if (text) return text;
+    }
+    return '';
   }
 
-  function domToMarkdown(root) {
+  function directTexts(el) {
+    return [...el.childNodes]
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => cleanText(node.textContent))
+      .filter(Boolean);
+  }
+
+  function visibleTextLines(el) {
+    return cleanText(el?.innerText)
+      .split('\n')
+      .map(cleanText)
+      .filter(Boolean);
+  }
+
+  function getDetailItems() {
+    const main = document.querySelector('.scaffold-layout__main') || document.querySelector('main') || document.body;
+
+    // LinkedIn detail pages usually render each record as one of these list items.
+    const candidates = [
+      ...main.querySelectorAll('li.pvs-list__paged-list-item'),
+      ...main.querySelectorAll('.pvs-list > li'),
+    ];
+
+    const unique = [];
+    const seen = new Set();
+
+    for (const item of candidates) {
+      if (shouldSkipElement(item)) continue;
+
+      const text = cleanText(item.innerText);
+      if (!text || seen.has(text)) continue;
+      if (text.length < 8) continue;
+
+      seen.add(text);
+      unique.push(item);
+    }
+
+    return unique;
+  }
+
+  function roleMarkdownFromItem(item) {
+    const lines = visibleTextLines(item);
+
+    // Remove obvious LinkedIn UI/accessibility noise.
+    const filtered = lines.filter((line) => {
+      const lower = line.toLowerCase();
+      return !(
+        lower === 'edit' ||
+        lower.startsWith('edit ') ||
+        lower === 'show all' ||
+        lower === 'see more' ||
+        lower === 'show more'
+      );
+    });
+
+    if (!filtered.length) return '';
+
+    const title = filtered[0];
+    const company = filtered[1] || '';
+    const dates = filtered[2] || '';
+    const location = filtered[3] || '';
+
+    const bodyLines = filtered.slice(4).filter((line) => {
+      const lower = line.toLowerCase();
+      return !lower.includes('skill') && !lower.includes('skills');
+    });
+
+    const skillLine = filtered.find((line) => /\bskill(s)?\b/i.test(line));
+
+    const out = [];
+    out.push(`## ${title}`);
+
+    const meta = [company, dates, location].filter(Boolean).join('  \n');
+    if (meta) {
+      out.push('');
+      out.push(meta);
+    }
+
+    if (bodyLines.length) {
+      out.push('');
+
+      // Treat separate LinkedIn description lines as prose paragraphs, not list items.
+      out.push(bodyLines.join('\n\n'));
+    }
+
+    if (skillLine) {
+      out.push('');
+      out.push(`**Skills:** ${skillLine.replace(/^.*?skills?\s*/i, '').trim() || skillLine}`);
+    }
+
+    return out.join('\n');
+  }
+
+  function fallbackDomToMarkdown(root) {
     const lines = [];
     const seenBlocks = new Set();
 
-    function addLine(line = '') {
-      const cleaned = typeof line === 'string' ? line.trimEnd() : '';
-      lines.push(cleaned);
-    }
-
-    function addParagraph(text) {
+    function addBlock(text) {
       const cleaned = cleanText(text);
-      if (!cleaned) return;
-
-      if (seenBlocks.has(cleaned)) return;
+      if (!cleaned || seenBlocks.has(cleaned)) return;
       seenBlocks.add(cleaned);
-
-      addLine(cleaned);
-      addLine('');
+      lines.push(cleaned, '');
     }
 
     function walk(node) {
       if (!node) return;
 
       if (node.nodeType === Node.TEXT_NODE) {
-        const text = cleanText(node.textContent);
-        if (text) addParagraph(text);
+        addBlock(node.textContent);
         return;
       }
 
@@ -236,10 +367,7 @@
       if (/^h[1-6]$/.test(tag)) {
         const level = Number(tag[1]);
         const text = cleanText(el.innerText);
-        if (text) {
-          addLine(`${'#'.repeat(level)} ${text}`);
-          addLine('');
-        }
+        if (text) lines.push(`${'#'.repeat(level)} ${text}`, '');
         return;
       }
 
@@ -247,40 +375,43 @@
         const text = cleanText(el.innerText);
         if (text && !seenBlocks.has(text)) {
           seenBlocks.add(text);
-          addLine(`- ${text.replace(/\n+/g, '\n  ')}`);
-          addLine('');
+          lines.push(`- ${text.replace(/\n+/g, '\n  ')}`, '');
         }
         return;
       }
 
-      if (tag === 'a') {
-        const text = cleanText(el.innerText);
-        const href = el.href;
-        if (text && href && !href.startsWith('javascript:')) {
-          addParagraph(`[${text}](${href})`);
-          return;
-        }
-      }
-
-      const roleLikeContainer = el.matches(
-        '.pvs-list__paged-list-item, .pvs-entity, .artdeco-card, section'
-      );
-
-      if (roleLikeContainer) {
-        addLine('');
-      }
-
-      for (const child of el.childNodes) {
-        walk(child);
-      }
-
-      if (roleLikeContainer) {
-        addLine('');
-      }
+      for (const child of el.childNodes) walk(child);
     }
 
     walk(root);
-    return normalizeMarkdown(lines.join('\n'));
+    return lines.join('\n');
+  }
+
+  function normalizeMarkdown(markdown) {
+    return markdown
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim() + '\n';
+  }
+
+  function pageToMarkdown() {
+    const main = document.querySelector('.scaffold-layout__main') || document.querySelector('main') || document.body;
+    const sectionHeading = headingFromPage();
+    const items = getDetailItems();
+
+    const parts = [`# ${sectionHeading}`];
+
+    if (items.length) {
+      for (const item of items) {
+        const itemMd = roleMarkdownFromItem(item);
+        if (itemMd) parts.push(itemMd);
+      }
+
+      return normalizeMarkdown(parts.join('\n\n'));
+    }
+
+    parts.push(fallbackDomToMarkdown(main));
+    return normalizeMarkdown(parts.join('\n\n'));
   }
 
   function downloadTextFile({ fileName, text, mimeType }) {
@@ -301,12 +432,7 @@
     expandSeeMoreButtons();
 
     window.setTimeout(() => {
-      const root =
-        document.querySelector('.scaffold-layout__main') ||
-        document.querySelector('main') ||
-        document.body;
-
-      const markdown = domToMarkdown(root);
+      const markdown = pageToMarkdown();
 
       downloadTextFile({
         fileName: markdownFileNameFromPage(),
@@ -375,6 +501,7 @@
   }
 
   function init() {
+    addStyles();
     addButtons();
   }
 
