@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.5.0
+// @version      1.5.1
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -737,12 +737,14 @@
   function setBusy(on, message) {
     let overlay = document.getElementById(BUSY_OVERLAY_ID);
     if (on) {
+      const header = findHeader();
+      const headerHeight = header ? Math.max(header.getBoundingClientRect().height, 48) : 52;
       if (!overlay) {
         overlay = document.createElement('div');
         overlay.id = BUSY_OVERLAY_ID;
         overlay.style.cssText = [
           'position: fixed',
-          'top: 12px',
+          `top: ${Math.round(headerHeight + 12)}px`,
           'left: 50%',
           'transform: translateX(-50%)',
           'z-index: 2147483647',
@@ -768,30 +770,24 @@
     const toolbar = document.createElement('div');
     toolbar.id = TOOLBAR_ID;
 
-    const inHeader = !!findHeader();
-    if (inHeader) {
-      // Float at the right edge of the header bar.
-      toolbar.style.cssText = [
-        'position: fixed',
-        'top: 8px',
-        'right: 16px',
-        'z-index: 9999',
-        'display: inline-flex',
-        'align-items: center',
-        'pointer-events: auto',
-      ].join(';');
-    } else {
-      // Fallback: tucked into the top-right corner without overlapping
-      // page content (header is ~52px tall on linkedin).
-      toolbar.style.cssText = [
-        'position: fixed',
-        'top: 8px',
-        'right: 16px',
-        'z-index: 9999',
-        'display: inline-flex',
-        'align-items: center',
-      ].join(';');
-    }
+    // Sit in a second row directly below LinkedIn's nav (the header
+    // is ~52px tall) so we don't overlap LinkedIn's own icons.
+    const header = findHeader();
+    const headerHeight = header ? Math.max(header.getBoundingClientRect().height, 48) : 52;
+    toolbar.style.cssText = [
+      'position: fixed',
+      `top: ${Math.round(headerHeight + 6)}px`,
+      'right: 16px',
+      'z-index: 9999',
+      'display: inline-flex',
+      'align-items: center',
+      'padding: 4px 6px',
+      'background: rgba(255,255,255,0.92)',
+      'border: 1px solid rgba(0,0,0,0.08)',
+      'border-radius: 8px',
+      'box-shadow: 0 2px 6px rgba(0,0,0,0.08)',
+      'pointer-events: auto',
+    ].join(';');
 
     const formatButton = createIconButton({
       id: FORMAT_BUTTON_ID,
