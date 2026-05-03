@@ -1,11 +1,15 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.4.0
+// @version      1.4.1
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
+// @match        https://www.linkedin.com/in/*/details/*/*
+// @match        https://*.linkedin.com/in/*/details/*
+// @include      /^https:\/\/(www\.)?linkedin\.com\/in\/[^/]+\/details\/.+/
 // @icon         https://www.linkedin.com/favicon.ico
+// @run-at       document-idle
 // @grant        none
 // @downloadURL  https://raw.githubusercontent.com/rpeck/rpeck-monkeyscripts/main/linkedin-printable-format/linkedin-printable-format.user.js
 // @updateURL    https://raw.githubusercontent.com/rpeck/rpeck-monkeyscripts/main/linkedin-printable-format/linkedin-printable-format.user.js
@@ -15,6 +19,8 @@
 
 (function () {
   'use strict';
+
+  console.log('[LinkedIn Printable Format] Script loaded:', location.href, 'readyState=' + document.readyState);
 
   const STYLE_ID = 'linkedin-printable-format-style';
   const FORMAT_BUTTON_ID = 'linkedin-printable-format-button';
