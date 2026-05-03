@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gmail Enhancements
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.5.5
+// @version      1.6.0
 // @description  Gmail enhancements: Important Inbox button, task-email integration with highlighting
 // @author       rpeck
 // @match        https://mail.google.com/*
@@ -28,8 +28,55 @@
   // ============================================================
 
   const DEBUG = true;
+  const SCRIPT_NAME = 'Gmail Enhancements';
+  const ERROR_BANNER_ID = 'gmail-enhancements-error-banner';
   function log(...args) {
     if (DEBUG) console.log('[Gmail Enhancements]', ...args);
+  }
+
+  /**
+   * Show a visible error banner when a critical selector fails.
+   * Most likely cause: Gmail changed its DOM.
+   */
+  function showSelectorError(missing) {
+    if (document.getElementById(ERROR_BANNER_ID)) return;
+    if (!document.body) return;
+
+    console.error('[Gmail Enhancements] SELECTOR FAILURE', {
+      url: location.href,
+      missing,
+      hint: 'Selectors used to locate Gmail UI no longer match. Update the script or report at https://github.com/rpeck/rpeck-monkeyscripts/issues',
+    });
+
+    const banner = document.createElement('div');
+    banner.id = ERROR_BANNER_ID;
+    banner.setAttribute('role', 'alert');
+    banner.style.cssText = [
+      'position: fixed', 'top: 12px', 'right: 12px', 'z-index: 2147483647',
+      'max-width: 420px', 'padding: 12px 16px', 'background: #b91c1c',
+      'color: #fff', 'font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif',
+      'border-radius: 6px', 'box-shadow: 0 4px 12px rgba(0,0,0,0.3)',
+    ].join(';');
+
+    const text = document.createElement('div');
+    text.textContent = `${SCRIPT_NAME}: could not find ${missing.join(' or ')} \u2014 Gmail's DOM has likely changed.`;
+    text.style.marginRight = '24px';
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '\u00d7';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.style.cssText = 'position:absolute;top:4px;right:8px;background:transparent;border:none;color:#fff;font-size:18px;line-height:1;cursor:pointer;padding:4px';
+    close.addEventListener('click', () => banner.remove());
+
+    const hint = document.createElement('div');
+    hint.textContent = 'See DevTools console for details.';
+    hint.style.cssText = 'margin-top:6px;font-size:11px;opacity:0.85';
+
+    banner.appendChild(close);
+    banner.appendChild(text);
+    banner.appendChild(hint);
+    document.body.appendChild(banner);
   }
 
   // ============================================================
@@ -218,8 +265,9 @@
    * Find the Tasks sidebar panel
    */
   function findTasksPanel() {
-    // Gmail's Tasks panel is in an iframe or a specific panel structure
-    // Look for multiple complementary regions and find the one with Tasks
+    // Try multiple strategies to find the Tasks panel
+
+    // Strategy 1: Look for complementary regions
     const complementaryRegions = document.querySelectorAll('[role="complementary"]');
     log('Found', complementaryRegions.length, 'complementary regions');
 
@@ -232,30 +280,45 @@
       }
     }
 
-    // Try finding by looking for the Tasks header directly
-    const tasksHeaders = document.querySelectorAll('div, span, h2');
-    for (const el of tasksHeaders) {
-      if (el.textContent?.trim().toLowerCase() === 'tasks') {
-        // Found the header, get its container panel
-        const panel = el.closest('[role="complementary"]') ||
-                      el.closest('[data-panel-id]') ||
-                      el.closest('aside') ||
-                      el.parentElement?.parentElement?.parentElement;
-        if (panel) {
-          log('Found Tasks panel via header');
-          return panel;
+    // Strategy 2: Look for iframes that might contain Tasks
+    const iframes = document.querySelectorAll('iframe');
+    log('Found', iframes.length, 'iframes');
+    // Note: Can't access iframe content due to same-origin policy
+
+    // Strategy 3: Search entire document for Tasks-related content
+    const allElements = document.querySelectorAll('*');
+    for (const el of allElements) {
+      // Look for elements that look like a Tasks panel header
+      const text = el.textContent?.trim();
+      if (text === 'TASKS' || text === 'Tasks') {
+        // Found a Tasks header - look for a reasonable container
+        let container = el.parentElement;
+        for (let i = 0; i < 10 && container; i++) {
+          const containerText = container.textContent || '';
+          // A good container should have multiple task-related items
+          if (containerText.includes('Add a task') || containerText.includes("'s list")) {
+            log('Found Tasks panel via broad search, container:', container.className || container.tagName);
+            return container;
+          }
+          container = container.parentElement;
         }
       }
     }
 
-    // Try finding the right-side panel area
-    const rightPanels = document.querySelectorAll('.bq9, .brC-brG');
-    for (const panel of rightPanels) {
-      const text = panel.textContent || '';
-      const lower = text.toLowerCase();
-      if (lower.includes('tasks') || lower.includes('add a task')) {
-        log('Found Tasks panel via class selector');
-        return panel;
+    // Strategy 4: Look for specific Gmail panel classes
+    const panelSelectors = [
+      '.bq9', '.brC-brG', '[data-panel-id]', 'aside',
+      '[aria-label*="Tasks"]', '[aria-label*="tasks"]'
+    ];
+    for (const selector of panelSelectors) {
+      const panels = document.querySelectorAll(selector);
+      for (const panel of panels) {
+        const text = panel.textContent || '';
+        const lower = text.toLowerCase();
+        if (lower.includes('tasks') && (lower.includes('add a task') || text.includes("'s list"))) {
+          log('Found Tasks panel via selector:', selector);
+          return panel;
+        }
       }
     }
 
@@ -602,6 +665,21 @@
 
     // Initial check
     setTimeout(onSearchChange, 1000);
+
+    // Defensive: if Gmail's DOM changed and the button still hasn't appeared
+    // 15 seconds after init, show a visible error so the user knows the
+    // script is broken rather than silently doing nothing.
+    setTimeout(() => {
+      if (!document.getElementById('important-inbox-btn')) {
+        const composeBtn = document.querySelector('[gh="cm"]') ||
+                           document.querySelector('[data-tooltip="Compose"]');
+        const missing = [];
+        if (!composeBtn) missing.push('Compose button ([gh="cm"])');
+        else missing.push('Compose container');
+        showSelectorError(missing);
+      }
+    }, 15000);
+
     log('Initialization complete');
   }
 

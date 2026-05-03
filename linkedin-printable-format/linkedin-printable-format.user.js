@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.2.0
+// @version      1.4.0
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -20,7 +20,57 @@
   const FORMAT_BUTTON_ID = 'linkedin-printable-format-button';
   const RESET_BUTTON_ID = 'linkedin-printable-reset-button';
   const MARKDOWN_BUTTON_ID = 'linkedin-printable-markdown-button';
+  const ERROR_BANNER_ID = 'linkedin-printable-format-error-banner';
   const BODY_CLASS = 'linkedin-printable-format-mode';
+  const SCRIPT_NAME = 'LinkedIn Printable Format';
+
+  /**
+   * Show a visible error banner when a critical selector fails.
+   */
+  function showSelectorError(missing) {
+    if (document.getElementById(ERROR_BANNER_ID)) return;
+    if (!document.body) return;
+
+    console.error('[LinkedIn Printable Format] SELECTOR FAILURE', {
+      url: location.href,
+      missing,
+      hint: 'Selectors used to locate LinkedIn detail-page content no longer match. Update the script or report at https://github.com/rpeck/rpeck-monkeyscripts/issues',
+    });
+
+    const banner = document.createElement('div');
+    banner.id = ERROR_BANNER_ID;
+    banner.setAttribute('role', 'alert');
+    banner.style.cssText = [
+      'position: fixed', 'top: 12px', 'right: 12px', 'z-index: 2147483647',
+      'max-width: 420px', 'padding: 12px 16px', 'background: #b91c1c',
+      'color: #fff', 'font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif',
+      'border-radius: 6px', 'box-shadow: 0 4px 12px rgba(0,0,0,0.3)',
+    ].join(';');
+
+    const text = document.createElement('div');
+    text.textContent = `${SCRIPT_NAME}: could not find ${missing.join(' or ')} \u2014 LinkedIn's DOM has likely changed.`;
+    text.style.marginRight = '24px';
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '\u00d7';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.style.cssText = 'position:absolute;top:4px;right:8px;background:transparent;border:none;color:#fff;font-size:18px;line-height:1;cursor:pointer;padding:4px';
+    close.addEventListener('click', () => banner.remove());
+
+    const hint = document.createElement('div');
+    hint.textContent = 'See DevTools console for details.';
+    hint.style.cssText = 'margin-top:6px;font-size:11px;opacity:0.85';
+
+    banner.appendChild(close);
+    banner.appendChild(text);
+    banner.appendChild(hint);
+    document.body.appendChild(banner);
+  }
+
+  // ============================================================
+  // CSS Styles
+  // ============================================================
 
   function addStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -34,6 +84,7 @@
         overflow: visible !important;
       }
 
+      /* Hide known chrome by semantic tag */
       body.${BODY_CLASS} header,
       body.${BODY_CLASS} aside,
       body.${BODY_CLASS} footer,
@@ -43,74 +94,51 @@
       body.${BODY_CLASS} .msg-overlay-list-bubble,
       body.${BODY_CLASS} .msg-overlay-bubble-header,
       body.${BODY_CLASS} .msg-overlay-conversation-bubble,
-      body.${BODY_CLASS} .scaffold-layout__aside,
-      body.${BODY_CLASS} .scaffold-layout__sidebar,
-      body.${BODY_CLASS} .scaffold-layout-toolbar,
-      body.${BODY_CLASS} .artdeco-toast-item,
-      body.${BODY_CLASS} .pvs-navigation,
-      body.${BODY_CLASS} .pv-profile-sticky-header,
-      body.${BODY_CLASS} .profile-language,
-      body.${BODY_CLASS} [aria-label="Profile language"],
-      body.${BODY_CLASS} [data-view-name="profile-card"],
-      body.${BODY_CLASS} .ad-banner-container,
-      body.${BODY_CLASS} .premium-upsell-link,
-      body.${BODY_CLASS} .right-rail,
-      body.${BODY_CLASS} .authentication-outlet > div > div:not(.scaffold-layout) {
+      body.${BODY_CLASS} .artdeco-toast-item {
         display: none !important;
       }
 
-      body.${BODY_CLASS} .scaffold-layout,
-      body.${BODY_CLASS} .scaffold-layout__inner,
-      body.${BODY_CLASS} .scaffold-layout__row,
-      body.${BODY_CLASS} .scaffold-layout__content,
-      body.${BODY_CLASS} .scaffold-layout__main,
-      body.${BODY_CLASS} main {
+      /* Ancestors of the content container: full width, no styling */
+      body.${BODY_CLASS} [data-lpf-ancestor] {
         display: block !important;
-        grid-template-columns: 1fr !important;
         width: 100% !important;
         max-width: none !important;
-        min-width: 0 !important;
         margin: 0 !important;
         padding: 0 !important;
         background: #fff !important;
         overflow: visible !important;
       }
 
-      body.${BODY_CLASS} .scaffold-layout__main,
-      body.${BODY_CLASS} main > section,
-      body.${BODY_CLASS} main .artdeco-card {
-        margin-left: auto !important;
-        margin-right: auto !important;
+      /* The content container itself */
+      body.${BODY_CLASS} [data-lpf-content] {
+        display: block !important;
+        width: 100% !important;
         max-width: 850px !important;
-      }
-
-      body.${BODY_CLASS} .scaffold-layout__main {
+        margin: 24px auto !important;
         padding: 24px !important;
+        background: #fff !important;
+        overflow: visible !important;
       }
 
-      body.${BODY_CLASS} section,
-      body.${BODY_CLASS} .pvs-list__container,
-      body.${BODY_CLASS} .pvs-list,
-      body.${BODY_CLASS} .pvs-list__paged-list-item,
-      body.${BODY_CLASS} .artdeco-card {
+      /* Clean up cards */
+      body.${BODY_CLASS} [data-lpf-content] section,
+      body.${BODY_CLASS} [data-lpf-content] .artdeco-card {
         box-shadow: none !important;
         border: none !important;
         background: #fff !important;
-      }
-
-      body.${BODY_CLASS} .artdeco-card {
         border-radius: 0 !important;
       }
 
-      body.${BODY_CLASS} .pvs-entity__action-container,
-      body.${BODY_CLASS} .pvs-list__footer-wrapper,
-      body.${BODY_CLASS} .social-details-social-counts,
-      body.${BODY_CLASS} .update-components-actor__sub-description,
-      body.${BODY_CLASS} button[aria-label^="Edit"],
-      body.${BODY_CLASS} button[aria-label*="add" i],
-      body.${BODY_CLASS} button[aria-label*="Add"],
-      body.${BODY_CLASS} button[aria-label*="reorder" i],
-      body.${BODY_CLASS} .pvs-list__item--with-top-padding > div > div:first-child:not(:only-child) {
+      /* Hide edit/action controls inside content */
+      body.${BODY_CLASS} a[aria-label^="Edit "],
+      body.${BODY_CLASS} button[aria-label^="Edit "],
+      body.${BODY_CLASS} a[aria-label*="Add a"],
+      body.${BODY_CLASS} button[aria-label*="Add a"],
+      body.${BODY_CLASS} a[aria-label*="Reorder"],
+      body.${BODY_CLASS} button[aria-label*="Reorder"],
+      body.${BODY_CLASS} a[aria-label*="reorder"],
+      body.${BODY_CLASS} button[aria-label*="reorder"],
+      body.${BODY_CLASS} a[aria-label="Navigate back to profile main screen"] {
         display: none !important;
       }
 
@@ -124,14 +152,14 @@
           print-color-adjust: exact;
         }
 
-        body.${BODY_CLASS} .scaffold-layout__main {
+        body.${BODY_CLASS} [data-lpf-content] {
           max-width: none !important;
           padding: 0 !important;
+          margin: 0 !important;
         }
 
-        body.${BODY_CLASS} li,
-        body.${BODY_CLASS} .pvs-list__paged-list-item,
-        body.${BODY_CLASS} .pvs-entity {
+        body.${BODY_CLASS} [componentkey^="entity-collection-item"],
+        body.${BODY_CLASS} li {
           break-inside: avoid;
           page-break-inside: avoid;
         }
@@ -146,6 +174,10 @@
 
     document.head.appendChild(style);
   }
+
+  // ============================================================
+  // Print Mode
+  // ============================================================
 
   function expandSeeMoreButtons() {
     const buttons = [...document.querySelectorAll('button')];
@@ -173,15 +205,72 @@
     }
   }
 
+  function findContentContainer() {
+    // LinkedIn detail pages use componentkey attributes on stable structural elements.
+    // Try the most specific first, then broaden.
+    return document.querySelector('[componentkey*="DetailsSection"]')
+      || document.querySelector('[data-component-type="LazyColumn"]')
+      || document.querySelector('[componentkey^="entity-collection-item"]')?.parentElement
+      || document.querySelector('.scaffold-layout__main')
+      || document.querySelector('main');
+  }
+
+  function isolateForPrint(contentEl) {
+    const keepIds = new Set([FORMAT_BUTTON_ID, RESET_BUTTON_ID, MARKDOWN_BUTTON_ID, STYLE_ID]);
+    contentEl.setAttribute('data-lpf-content', '');
+
+    let el = contentEl;
+    while (el.parentElement && el !== document.body && el !== document.documentElement) {
+      const parent = el.parentElement;
+      parent.setAttribute('data-lpf-ancestor', '');
+
+      for (const sibling of parent.children) {
+        if (sibling === el) continue;
+        if (keepIds.has(sibling.id)) continue;
+        if (sibling.tagName === 'SCRIPT' || sibling.tagName === 'STYLE' || sibling.tagName === 'LINK') continue;
+        sibling.setAttribute('data-lpf-hidden', '');
+        sibling.style.setProperty('display', 'none', 'important');
+      }
+
+      el = parent;
+    }
+  }
+
+  function restoreFromPrint() {
+    document.querySelectorAll('[data-lpf-hidden]').forEach(el => {
+      el.removeAttribute('data-lpf-hidden');
+      el.style.removeProperty('display');
+    });
+    document.querySelectorAll('[data-lpf-content]').forEach(el => {
+      el.removeAttribute('data-lpf-content');
+    });
+    document.querySelectorAll('[data-lpf-ancestor]').forEach(el => {
+      el.removeAttribute('data-lpf-ancestor');
+    });
+  }
+
   function enablePrintableMode() {
     addStyles();
     expandSeeMoreButtons();
+
+    const content = findContentContainer();
+    if (content) {
+      isolateForPrint(content);
+    } else {
+      showSelectorError(['detail-page content container ([componentkey*="DetailsSection"], [data-component-type="LazyColumn"], [componentkey^="entity-collection-item"])']);
+    }
+
     document.body.classList.add(BODY_CLASS);
   }
 
   function disablePrintableMode() {
     document.body.classList.remove(BODY_CLASS);
+    restoreFromPrint();
   }
+
+  // ============================================================
+  // Utility Functions
+  // ============================================================
 
   function cleanText(text) {
     return (text || '')
@@ -208,10 +297,12 @@
   }
 
   function headingFromPage() {
-    const explicitHeading = document.querySelector('.scaffold-layout__main h1, main h1');
-    const headingText = cleanText(explicitHeading?.innerText);
-    if (headingText) return headingText;
+    // Try to find an explicit heading on the page
+    const h1 = document.querySelector('h1');
+    const h1Text = cleanText(h1?.innerText);
+    if (h1Text) return h1Text;
 
+    // Derive from URL path
     const section = getSectionName()
       .replace(/-/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -219,162 +310,230 @@
     return section || 'LinkedIn Details';
   }
 
-  function isHidden(el) {
-    const style = window.getComputedStyle(el);
-    return style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
-  }
+  // ============================================================
+  // Markdown Extraction
+  // ============================================================
 
-  function shouldSkipElement(el) {
-    return Boolean(
-      el.closest(`#${FORMAT_BUTTON_ID}`) ||
-      el.closest(`#${RESET_BUTTON_ID}`) ||
-      el.closest(`#${MARKDOWN_BUTTON_ID}`) ||
-      el.matches('script, style, noscript, svg, img, nav, aside, footer, header, button') ||
-      el.matches('.global-nav, .msg-overlay-container, .msg-overlay-list-bubble, .msg-overlay-bubble-header') ||
-      el.matches('.pvs-entity__action-container, .pvs-list__footer-wrapper') ||
-      isHidden(el)
-    );
-  }
+  const DATE_PATTERN = /(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}|\d{4}\s+-\s+/i;
 
-  function textFromSelectors(root, selectors) {
-    for (const selector of selectors) {
-      const el = root.querySelector(selector);
-      const text = cleanText(el?.innerText);
-      if (text) return text;
-    }
-    return '';
-  }
+  /**
+   * Extract metadata (title, company, dates, location) from the edit-form
+   * link inside an entry.  LinkedIn wraps these <p> elements in
+   * a[href*="/edit/forms/"] in document order:
+   *   Single entry:  [title, company·type, dates, location]
+   *   Grouped sub-role: [title, dates]
+   */
+  function extractMetadata(container) {
+    const metaLink = container.querySelector('a[href*="/edit/forms/"]');
+    if (!metaLink) return null;
 
-  function directTexts(el) {
-    return [...el.childNodes]
-      .filter((node) => node.nodeType === Node.TEXT_NODE)
-      .map((node) => cleanText(node.textContent))
-      .filter(Boolean);
-  }
+    const paragraphs = metaLink.querySelectorAll('p');
+    const texts = Array.from(paragraphs).map(p => cleanText(p.innerText)).filter(Boolean);
 
-  function visibleTextLines(el) {
-    return cleanText(el?.innerText)
-      .split('\n')
-      .map(cleanText)
-      .filter(Boolean);
-  }
+    if (texts.length === 0) return null;
 
-  function getDetailItems() {
-    const main = document.querySelector('.scaffold-layout__main') || document.querySelector('main') || document.body;
+    const result = { title: texts[0] };
 
-    // LinkedIn detail pages usually render each record as one of these list items.
-    const candidates = [
-      ...main.querySelectorAll('li.pvs-list__paged-list-item'),
-      ...main.querySelectorAll('.pvs-list > li'),
-    ];
-
-    const unique = [];
-    const seen = new Set();
-
-    for (const item of candidates) {
-      if (shouldSkipElement(item)) continue;
-
-      const text = cleanText(item.innerText);
-      if (!text || seen.has(text)) continue;
-      if (text.length < 8) continue;
-
-      seen.add(text);
-      unique.push(item);
+    if (texts.length === 2) {
+      // Grouped sub-role: [title, dates] or possibly [title, company]
+      if (DATE_PATTERN.test(texts[1])) {
+        result.dates = texts[1];
+      } else {
+        result.companyLine = texts[1];
+      }
+    } else if (texts.length >= 3) {
+      // Single entry: [title, company, dates, location?]
+      result.companyLine = texts[1];
+      result.dates = texts[2];
+      if (texts[3]) result.location = texts[3];
     }
 
-    return unique;
+    return result;
   }
 
-  function roleMarkdownFromItem(item) {
-    const lines = visibleTextLines(item);
-
-    // Remove obvious LinkedIn UI/accessibility noise.
-    const filtered = lines.filter((line) => {
-      const lower = line.toLowerCase();
-      return !(
-        lower === 'edit' ||
-        lower.startsWith('edit ') ||
-        lower === 'show all' ||
-        lower === 'see more' ||
-        lower === 'show more'
-      );
-    });
-
-    if (!filtered.length) return '';
-
-    const title = filtered[0];
-    const company = filtered[1] || '';
-    const dates = filtered[2] || '';
-    const location = filtered[3] || '';
-
-    const bodyLines = filtered.slice(4).filter((line) => {
-      const lower = line.toLowerCase();
-      return !lower.includes('skill') && !lower.includes('skills');
-    });
-
-    const skillLine = filtered.find((line) => /\bskill(s)?\b/i.test(line));
-
-    const out = [];
-    out.push(`## ${title}`);
-
-    const meta = [company, dates, location].filter(Boolean).join('  \n');
-    if (meta) {
-      out.push('');
-      out.push(meta);
-    }
-
-    if (bodyLines.length) {
-      out.push('');
-
-      // Treat separate LinkedIn description lines as prose paragraphs, not list items.
-      out.push(bodyLines.join('\n\n'));
-    }
-
-    if (skillLine) {
-      out.push('');
-      out.push(`**Skills:** ${skillLine.replace(/^.*?skills?\s*/i, '').trim() || skillLine}`);
-    }
-
-    return out.join('\n');
+  function extractDescription(container) {
+    const descEls = container.querySelectorAll('[data-testid="expandable-text-box"]');
+    return Array.from(descEls)
+      .map(el => cleanText(el.innerText))
+      .filter(Boolean)
+      .join('\n\n');
   }
 
+  function extractSkills(container) {
+    const skillLink = container.querySelector('a[href*="skill-associations-details"]');
+    if (!skillLink) return '';
+    let text = cleanText(skillLink.innerText);
+    // Strip "Skills:" prefix if present
+    text = text.replace(/^skills:\s*/i, '').trim();
+    return text;
+  }
+
+  /**
+   * Extract company header for grouped entries (multiple roles at one company).
+   * The company info is in a[href*="/company/"] that contains <p> elements.
+   */
+  function extractGroupHeader(item) {
+    const companyLinks = item.querySelectorAll('a[href*="/company/"]');
+    let companyTextLink = null;
+    for (const link of companyLinks) {
+      if (link.querySelector('p')) {
+        companyTextLink = link;
+        break;
+      }
+    }
+
+    if (companyTextLink) {
+      const ps = companyTextLink.querySelectorAll('p');
+      const texts = Array.from(ps).map(p => cleanText(p.innerText)).filter(Boolean);
+      return {
+        company: texts[0] || '',
+        duration: texts[1] || '',
+        location: texts[2] || '',
+      };
+    }
+
+    // Fallback: get text from the header area (before <ul>)
+    const ul = item.querySelector('ul');
+    const allPs = item.querySelectorAll('p');
+    const headerTexts = [];
+    for (const p of allPs) {
+      if (ul && ul.contains(p)) break;
+      const text = cleanText(p.innerText);
+      if (text) headerTexts.push(text);
+    }
+
+    return {
+      company: headerTexts[0] || '',
+      duration: headerTexts[1] || '',
+      location: headerTexts[2] || '',
+    };
+  }
+
+  function formatCompanyLine(companyLine) {
+    if (!companyLine) return '';
+    const parts = companyLine.split('\u00b7').length > 1
+      ? companyLine.split('\u00b7')  // Unicode middle dot
+      : companyLine.split('·');      // Regular dot
+    if (parts.length >= 2) {
+      return `**${parts[0].trim()}** · ${parts.slice(1).join(' · ').trim()}`;
+    }
+    return `**${companyLine}**`;
+  }
+
+  function formatSingleEntry(item) {
+    const meta = extractMetadata(item);
+    if (!meta || !meta.title) return '';
+
+    const desc = extractDescription(item);
+    const skills = extractSkills(item);
+
+    const lines = [];
+    lines.push(`## ${meta.title}`);
+
+    const metaLines = [];
+    if (meta.companyLine) metaLines.push(formatCompanyLine(meta.companyLine));
+    if (meta.dates) metaLines.push(meta.dates);
+    if (meta.location) metaLines.push(meta.location);
+    if (metaLines.length) {
+      lines.push(metaLines.join('  \n'));
+    }
+
+    if (desc) {
+      lines.push('');
+      lines.push(desc);
+    }
+
+    if (skills) {
+      lines.push('');
+      lines.push(`**Skills:** ${skills}`);
+    }
+
+    return lines.join('\n');
+  }
+
+  function formatGroupedEntry(item) {
+    const header = extractGroupHeader(item);
+    if (!header.company) return '';
+
+    const lines = [];
+    lines.push(`## ${header.company}`);
+
+    const headerMeta = [];
+    if (header.duration) headerMeta.push(header.duration);
+    if (header.location) headerMeta.push(header.location);
+    if (headerMeta.length) {
+      lines.push(`*${headerMeta.join(' · ')}*`);
+    }
+
+    const subRoles = item.querySelectorAll('ul > li');
+    for (const li of subRoles) {
+      const meta = extractMetadata(li);
+      if (!meta || !meta.title) continue;
+
+      const desc = extractDescription(li);
+      const skills = extractSkills(li);
+
+      lines.push('');
+      lines.push(`### ${meta.title}`);
+
+      const roleMeta = [];
+      if (meta.companyLine) roleMeta.push(meta.companyLine);
+      if (meta.dates) roleMeta.push(meta.dates);
+      if (roleMeta.length) {
+        lines.push(roleMeta.join('  \n'));
+      }
+
+      if (desc) {
+        lines.push('');
+        lines.push(desc);
+      }
+
+      if (skills) {
+        lines.push('');
+        lines.push(`**Skills:** ${skills}`);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Fallback: walk the DOM and produce best-effort markdown when no
+   * componentkey structure is found.
+   */
   function fallbackDomToMarkdown(root) {
     const lines = [];
-    const seenBlocks = new Set();
-
-    function addBlock(text) {
-      const cleaned = cleanText(text);
-      if (!cleaned || seenBlocks.has(cleaned)) return;
-      seenBlocks.add(cleaned);
-      lines.push(cleaned, '');
-    }
+    const seen = new Set();
 
     function walk(node) {
       if (!node) return;
-
       if (node.nodeType === Node.TEXT_NODE) {
-        addBlock(node.textContent);
+        const text = cleanText(node.textContent);
+        if (text && !seen.has(text)) {
+          seen.add(text);
+          lines.push(text, '');
+        }
         return;
       }
-
       if (node.nodeType !== Node.ELEMENT_NODE) return;
 
       const el = node;
       const tag = el.tagName.toLowerCase();
-
-      if (shouldSkipElement(el)) return;
+      if (el.matches('script, style, noscript, svg, img, nav, button') ||
+          el.id === FORMAT_BUTTON_ID || el.id === RESET_BUTTON_ID || el.id === MARKDOWN_BUTTON_ID) {
+        return;
+      }
 
       if (/^h[1-6]$/.test(tag)) {
-        const level = Number(tag[1]);
         const text = cleanText(el.innerText);
-        if (text) lines.push(`${'#'.repeat(level)} ${text}`, '');
+        if (text) lines.push(`${'#'.repeat(Number(tag[1]))} ${text}`, '');
         return;
       }
 
       if (tag === 'li') {
         const text = cleanText(el.innerText);
-        if (text && !seenBlocks.has(text)) {
-          seenBlocks.add(text);
+        if (text && !seen.has(text)) {
+          seen.add(text);
           lines.push(`- ${text.replace(/\n+/g, '\n  ')}`, '');
         }
         return;
@@ -387,32 +546,35 @@
     return lines.join('\n');
   }
 
-  function normalizeMarkdown(markdown) {
-    return markdown
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim() + '\n';
-  }
-
   function pageToMarkdown() {
-    const main = document.querySelector('.scaffold-layout__main') || document.querySelector('main') || document.body;
     const sectionHeading = headingFromPage();
-    const items = getDetailItems();
+    const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
 
     const parts = [`# ${sectionHeading}`];
 
-    if (items.length) {
+    if (items.length === 0) {
+      // No componentkey structure — fall back to DOM walk
+      const main = document.querySelector('.scaffold-layout__main')
+        || document.querySelector('main')
+        || document.body;
+      parts.push(fallbackDomToMarkdown(main));
+    } else {
       for (const item of items) {
-        const itemMd = roleMarkdownFromItem(item);
-        if (itemMd) parts.push(itemMd);
+        const hasSubRoles = item.querySelector('ul > li') !== null;
+        const md = hasSubRoles ? formatGroupedEntry(item) : formatSingleEntry(item);
+        if (md) parts.push(md);
       }
-
-      return normalizeMarkdown(parts.join('\n\n'));
     }
 
-    parts.push(fallbackDomToMarkdown(main));
-    return normalizeMarkdown(parts.join('\n\n'));
+    return parts.join('\n\n---\n\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{4,}/g, '\n\n\n')
+      .trim() + '\n';
   }
+
+  // ============================================================
+  // Download
+  // ============================================================
 
   function downloadTextFile({ fileName, text, mimeType }) {
     const blob = new Blob([text], { type: mimeType });
@@ -432,6 +594,11 @@
     expandSeeMoreButtons();
 
     window.setTimeout(() => {
+      const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
+      if (items.length === 0) {
+        showSelectorError(['detail entries ([componentkey^="entity-collection-item"])']);
+      }
+
       const markdown = pageToMarkdown();
 
       downloadTextFile({
@@ -441,6 +608,10 @@
       });
     }, 750);
   }
+
+  // ============================================================
+  // Buttons
+  // ============================================================
 
   function createButton({ id, text, right, background, onClick }) {
     const button = document.createElement('button');
@@ -500,6 +671,10 @@
     document.body.appendChild(markdownButton);
   }
 
+  // ============================================================
+  // Init
+  // ============================================================
+
   function init() {
     addStyles();
     addButtons();
@@ -517,7 +692,7 @@
   const observer = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      document.body.classList.remove(BODY_CLASS);
+      disablePrintableMode();
       window.setTimeout(addButtons, 1000);
     }
   });
