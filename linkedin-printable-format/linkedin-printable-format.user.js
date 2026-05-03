@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.6.1
+// @version      1.7.0
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -230,88 +230,110 @@
   }
 
   /**
-   * Is every scroll container (window + any inner overflow:auto div)
-   * at its bottom edge, within a small tolerance?  Used so we don't
-   * exit auto-scroll while there's still content below.
+   * Maximum scroll position reachable on the page or any inner
+   * scrollable element.  Treats document scroll and inner-element
+   * scroll uniformly so we can answer "have we hit the bottom?"
+   * for whichever element actually scrolls.
    */
-  function isAtBottom(tolerance = 4) {
-    const winBottom = window.innerHeight + window.scrollY;
-    const docH = document.documentElement.scrollHeight;
-    if (winBottom < docH - tolerance) return false;
-
-    for (const el of findScrollables()) {
-      if (el.scrollTop + el.clientHeight < el.scrollHeight - tolerance) {
-        return false;
-      }
-    }
-    return true;
+  function maxDocScrollY() {
+    return Math.max(
+      document.documentElement.scrollHeight - window.innerHeight,
+      document.body.scrollHeight - window.innerHeight,
+      0,
+    );
   }
 
   /**
-   * LinkedIn lazy-loads detail entries via IntersectionObserver as the
-   * user scrolls.  We loop until BOTH:
-   *   (a) every scroll container is at its bottom, AND
-   *   (b) the entry count + heights have been stable for several ticks.
-   * Either condition alone is insufficient: (a) can be true while a
-   * lazy-load is mid-flight (about to extend the content); (b) can be
-   * true if lazy-loading is slower than our step delay.
+   * Incrementally scroll the page in viewport-sized chunks until both
+   * (a) scrollY can't advance any further, and (b) the entity count
+   * stops growing.  Jumping straight to scrollHeight skips past
+   * intermediate items and can starve LinkedIn's IntersectionObserver
+   * of trigger events; chunked scrolling forces every entry to pass
+   * through the viewport.
    */
   async function autoScrollToLoadAll() {
     const originalY = window.scrollY;
-    const stepDelay = 400;
-    const maxIterations = 120;
-    const stableThreshold = 5;
+    const chunkPx = Math.max(Math.round(window.innerHeight * 0.8), 400);
+    const stepDelay = 280;
+    const maxIterations = 300;
+    const stableThreshold = 6;
 
-    let lastFingerprint = '';
     let stableCount = 0;
+    let lastY = -1;
+    let lastCount = -1;
+    let lastInnerScrollState = '';
     let iterations = 0;
 
-    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: starting');
+    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: starting; viewport=' +
+      window.innerHeight + 'px, chunk=' + chunkPx + 'px, initial scrollHeight=' +
+      document.documentElement.scrollHeight);
 
     while (iterations < maxIterations) {
-      // Strategy 1: scroll the last entity item into view.  Delegates
-      // to whichever element is actually scrollable.
-      const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
-      const lastItem = items[items.length - 1];
-      if (lastItem) {
-        lastItem.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'instant' });
+      // Scroll the window down by a viewport chunk.
+      const beforeY = window.scrollY;
+      window.scrollBy(0, chunkPx);
+
+      // Also advance any inner overflow:auto/scroll containers, in
+      // case the actual scrollable element isn't the window.
+      const inners = findScrollables();
+      for (const el of inners) {
+        el.scrollBy ? el.scrollBy(0, chunkPx) : (el.scrollTop += chunkPx);
       }
 
-      // Strategy 2: belt-and-suspenders — push every scroll container
-      // (window + every discovered inner overflow:auto element) to its
-      // max scroll position.
-      window.scrollTo(0, document.documentElement.scrollHeight);
-      for (const el of findScrollables()) {
-        el.scrollTop = el.scrollHeight;
+      // If even after scrollBy the window didn't move, fall back to
+      // last-item.scrollIntoView — handles cases where the page's
+      // scroll is delegated to an inner element we missed.
+      if (window.scrollY === beforeY) {
+        const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
+        const lastItem = items[items.length - 1];
+        if (lastItem) {
+          lastItem.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'instant' });
+        }
       }
 
-      // Strategy 3: click any "see more" buttons that became visible
       expandSeeMoreButtons();
-
       await new Promise(r => setTimeout(r, stepDelay));
 
-      const newCount = document.querySelectorAll('[componentkey^="entity-collection-item"]').length;
-      const docH = document.documentElement.scrollHeight;
-      const bodyH = document.body.scrollHeight;
-      const fingerprint = `${newCount}:${docH}:${bodyH}`;
+      const y = window.scrollY;
+      const maxY = maxDocScrollY();
+      const count = document.querySelectorAll('[componentkey^="entity-collection-item"]').length;
+      const innerScrollState = inners.map(el => `${el.scrollTop}/${el.scrollHeight - el.clientHeight}`).join(',');
 
-      if (fingerprint === lastFingerprint) {
+      iterations++;
+
+      // Per-iteration diagnostic.
+      if (iterations <= 10 || iterations % 5 === 0) {
+        console.log(`[LinkedIn Printable Format] iter ${iterations}: y=${y}/${maxY} (window), inners=[${innerScrollState}], entries=${count}`);
+      }
+
+      const atBottomWindow = y >= maxY - 8;
+      const atBottomInner = inners.every(el => el.scrollTop + el.clientHeight >= el.scrollHeight - 8);
+      const atBottom = atBottomWindow && atBottomInner;
+
+      if (y === lastY && count === lastCount && innerScrollState === lastInnerScrollState) {
         stableCount++;
       } else {
         stableCount = 0;
-        lastFingerprint = fingerprint;
       }
+      lastY = y;
+      lastCount = count;
+      lastInnerScrollState = innerScrollState;
 
-      iterations++;
-      setBusy(true, `Loading entries\u2026 (${newCount} so far)`);
+      setBusy(true, `Loading entries\u2026 (${count} so far)`);
 
-      // Exit only when stable AND we're actually at the bottom.
-      if (stableCount >= stableThreshold && isAtBottom(8)) {
+      // Exit when both at-bottom AND nothing has changed for several
+      // iterations.  The stable-count safety net handles edge cases
+      // where atBottom is true but a fetch is still in-flight.
+      if (atBottom && stableCount >= stableThreshold) {
+        console.log(`[LinkedIn Printable Format] exit: atBottom + stable for ${stableCount} iters`);
         break;
       }
     }
 
-    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: done after', iterations, 'iterations, fingerprint=', lastFingerprint, 'isAtBottom=', isAtBottom(8));
+    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: done after',
+      iterations, 'iterations; final scrollY=' + window.scrollY,
+      'final scrollHeight=' + document.documentElement.scrollHeight,
+      'final entry count=' + document.querySelectorAll('[componentkey^="entity-collection-item"]').length);
 
     window.scrollTo({ top: originalY, behavior: 'instant' });
     await new Promise(r => setTimeout(r, 150));
