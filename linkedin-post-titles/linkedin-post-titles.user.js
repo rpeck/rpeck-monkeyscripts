@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Post Titles
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.1.0
+// @version      1.2.0
 // @description  Replaces generic LinkedIn post tab titles with meaningful ones: "LinkedIn Post - Author - Topic"
 // @author       rpeck
 // @match        https://www.linkedin.com/posts/*
@@ -44,13 +44,21 @@
    * Extract author name from the page
    */
   function getAuthorName() {
-    // Try JSON-LD first
+    // Most reliable: the control-menu button has aria-label "Open control menu for post by {Name}"
+    const controlBtn = document.querySelector('button[aria-label^="Open control menu for post by "]');
+    if (controlBtn) {
+      const label = controlBtn.getAttribute('aria-label') || '';
+      const m = label.match(/^Open control menu for post by\s+(.+?)\s*$/);
+      if (m) return m[1].trim();
+    }
+
+    // Fallback: JSON-LD (older LinkedIn)
     const jsonLd = getJsonLd();
     if (jsonLd?.author?.name) {
       return jsonLd.author.name;
     }
 
-    // Try the post author element in the DOM
+    // Fallback: legacy class-based selectors (in case LinkedIn reverts)
     const authorSelectors = [
       '.update-components-actor__name .visually-hidden',
       '.update-components-actor__title .visually-hidden',
@@ -63,7 +71,6 @@
     for (const selector of authorSelectors) {
       const el = document.querySelector(selector);
       if (el?.textContent?.trim()) {
-        // Clean up the name (remove "View X's profile" etc.)
         const text = el.textContent.trim();
         const cleaned = text.replace(/View .+'s profile/i, '').trim();
         if (cleaned) {
@@ -72,7 +79,6 @@
       }
     }
 
-    // Try meta tags
     const authorMeta = document.querySelector('meta[name="author"]');
     if (authorMeta?.content) {
       return authorMeta.content;
@@ -99,7 +105,12 @@
    * Extract first N characters from post body
    */
   function getTopicFromPostBody() {
+    // Current LinkedIn: post body is in [data-testid^="feed-commentary_"] or
+    // [componentkey^="feed-commentary_"]
     const bodySelectors = [
+      '[data-testid^="feed-commentary_"]',
+      '[componentkey^="feed-commentary_"]',
+      // Legacy fallbacks
       '.feed-shared-update-v2__description',
       '.update-components-text',
       '.feed-shared-text',
@@ -112,7 +123,6 @@
       const el = document.querySelector(selector);
       if (el?.textContent?.trim()) {
         const text = el.textContent.trim();
-        // Skip if it's just "see more" or similar
         if (text.length > 10) {
           return truncateText(text, MAX_TOPIC_LENGTH);
         }
