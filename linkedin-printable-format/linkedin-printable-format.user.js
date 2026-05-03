@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.4.1
+// @version      1.5.0
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -170,9 +170,8 @@
           page-break-inside: avoid;
         }
 
-        #${FORMAT_BUTTON_ID},
-        #${RESET_BUTTON_ID},
-        #${MARKDOWN_BUTTON_ID} {
+        #${TOOLBAR_ID},
+        #${BUSY_OVERLAY_ID} {
           display: none !important;
         }
       }
@@ -211,6 +210,46 @@
     }
   }
 
+  /**
+   * LinkedIn lazy-loads detail entries as the user scrolls.  Programmatically
+   * scroll to the bottom in chunks, waiting for content to settle, then back
+   * to the top.  Triggers IntersectionObserver-based loading so we capture
+   * every entry before extracting markdown or applying print mode.
+   */
+  async function autoScrollToLoadAll() {
+    const originalY = window.scrollY;
+    const stepDelay = 200;
+    const maxIterations = 80;
+    const stableThreshold = 4;
+
+    let lastHeight = 0;
+    let stableCount = 0;
+    let iterations = 0;
+
+    while (stableCount < stableThreshold && iterations < maxIterations) {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      // Click any "see more" buttons that became visible during the scroll
+      expandSeeMoreButtons();
+      await new Promise(r => setTimeout(r, stepDelay));
+
+      const currentHeight = document.documentElement.scrollHeight;
+      const itemCount = document.querySelectorAll('[componentkey^="entity-collection-item"]').length;
+      const fingerprint = currentHeight + ':' + itemCount;
+      if (fingerprint === lastHeight) {
+        stableCount++;
+      } else {
+        stableCount = 0;
+        lastHeight = fingerprint;
+      }
+      iterations++;
+    }
+
+    // Restore the user's scroll position.
+    window.scrollTo({ top: originalY, behavior: 'instant' });
+    // Give the layout a moment to settle after the scroll-back.
+    await new Promise(r => setTimeout(r, 100));
+  }
+
   function findContentContainer() {
     // LinkedIn detail pages use componentkey attributes on stable structural elements.
     // Try the most specific first, then broaden.
@@ -222,7 +261,10 @@
   }
 
   function isolateForPrint(contentEl) {
-    const keepIds = new Set([FORMAT_BUTTON_ID, RESET_BUTTON_ID, MARKDOWN_BUTTON_ID, STYLE_ID]);
+    const keepIds = new Set([
+      FORMAT_BUTTON_ID, RESET_BUTTON_ID, MARKDOWN_BUTTON_ID,
+      STYLE_ID, TOOLBAR_ID, BUSY_OVERLAY_ID, ERROR_BANNER_ID,
+    ]);
     contentEl.setAttribute('data-lpf-content', '');
 
     let el = contentEl;
@@ -255,23 +297,32 @@
     });
   }
 
-  function enablePrintableMode() {
+  async function enablePrintableMode() {
     addStyles();
-    expandSeeMoreButtons();
+    setBusy(true, 'Loading all entries\u2026');
 
-    const content = findContentContainer();
-    if (content) {
-      isolateForPrint(content);
-    } else {
-      showSelectorError(['detail-page content container ([componentkey*="DetailsSection"], [data-component-type="LazyColumn"], [componentkey^="entity-collection-item"])']);
+    try {
+      await autoScrollToLoadAll();
+      expandSeeMoreButtons();
+
+      const content = findContentContainer();
+      if (content) {
+        isolateForPrint(content);
+      } else {
+        showSelectorError(['detail-page content container ([componentkey*="DetailsSection"], [data-component-type="LazyColumn"], [componentkey^="entity-collection-item"])']);
+      }
+
+      document.body.classList.add(BODY_CLASS);
+      showResetButton(true);
+    } finally {
+      setBusy(false);
     }
-
-    document.body.classList.add(BODY_CLASS);
   }
 
   function disablePrintableMode() {
     document.body.classList.remove(BODY_CLASS);
     restoreFromPrint();
+    showResetButton(false);
   }
 
   // ============================================================
@@ -596,10 +647,13 @@
     URL.revokeObjectURL(url);
   }
 
-  function downloadMarkdown() {
-    expandSeeMoreButtons();
+  async function downloadMarkdown() {
+    setBusy(true, 'Loading all entries\u2026');
+    try {
+      await autoScrollToLoadAll();
+      expandSeeMoreButtons();
+      await new Promise(r => setTimeout(r, 250));
 
-    window.setTimeout(() => {
       const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
       if (items.length === 0) {
         showSelectorError(['detail entries ([componentkey^="entity-collection-item"])']);
@@ -612,69 +666,160 @@
         text: markdown,
         mimeType: 'text/markdown;charset=utf-8',
       });
-    }, 750);
+    } finally {
+      setBusy(false);
+    }
   }
 
   // ============================================================
-  // Buttons
+  // Toolbar (icon buttons in/near the LinkedIn header)
   // ============================================================
 
-  function createButton({ id, text, right, background, onClick }) {
+  const TOOLBAR_ID = 'linkedin-printable-format-toolbar';
+  const BUSY_OVERLAY_ID = 'linkedin-printable-format-busy';
+
+  /**
+   * Try to find LinkedIn's top header so we can dock the toolbar inside
+   * it.  Falls back to a fixed-position toolbar above the page content
+   * if no header is found.
+   */
+  function findHeader() {
+    return document.querySelector('header.global-nav')
+      || document.querySelector('nav.global-nav')
+      || document.querySelector('header[role="banner"]')
+      || document.querySelector('#global-nav')
+      || document.querySelector('header');
+  }
+
+  function createIconButton({ id, icon, tooltip, onClick }) {
     const button = document.createElement('button');
     button.id = id;
-    button.textContent = text;
     button.type = 'button';
+    button.title = tooltip;
+    button.setAttribute('aria-label', tooltip);
+    button.textContent = icon;
 
-    button.style.cssText = `
-      position: fixed;
-      top: 16px;
-      right: ${right}px;
-      z-index: 999999;
-      padding: 10px 14px;
-      background: ${background};
-      color: white;
-      border: none;
-      border-radius: 6px;
-      font-size: 14px;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      cursor: pointer;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-    `;
+    button.style.cssText = [
+      'display: inline-flex',
+      'align-items: center',
+      'justify-content: center',
+      'width: 32px',
+      'height: 32px',
+      'padding: 0',
+      'margin: 0 4px',
+      'background: rgba(255,255,255,0.95)',
+      'color: #0a66c2',
+      'border: 1px solid rgba(0,0,0,0.12)',
+      'border-radius: 6px',
+      'font-size: 16px',
+      'font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      'line-height: 1',
+      'cursor: pointer',
+      'box-shadow: 0 1px 2px rgba(0,0,0,0.08)',
+    ].join(';');
+
+    button.addEventListener('mouseenter', () => {
+      button.style.background = '#f0f6fc';
+    });
+    button.addEventListener('mouseleave', () => {
+      button.style.background = 'rgba(255,255,255,0.95)';
+    });
 
     button.addEventListener('click', onClick);
     return button;
   }
 
-  function addButtons() {
-    if (document.getElementById(FORMAT_BUTTON_ID)) return;
+  function showResetButton(visible) {
+    const btn = document.getElementById(RESET_BUTTON_ID);
+    if (btn) btn.style.display = visible ? 'inline-flex' : 'none';
+  }
 
-    const formatButton = createButton({
+  function setBusy(on, message) {
+    let overlay = document.getElementById(BUSY_OVERLAY_ID);
+    if (on) {
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = BUSY_OVERLAY_ID;
+        overlay.style.cssText = [
+          'position: fixed',
+          'top: 12px',
+          'left: 50%',
+          'transform: translateX(-50%)',
+          'z-index: 2147483647',
+          'padding: 8px 14px',
+          'background: rgba(10,102,194,0.95)',
+          'color: #fff',
+          'font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif',
+          'border-radius: 6px',
+          'box-shadow: 0 2px 8px rgba(0,0,0,0.25)',
+          'pointer-events: none',
+        ].join(';');
+        document.body.appendChild(overlay);
+      }
+      overlay.textContent = message || 'Working\u2026';
+    } else if (overlay) {
+      overlay.remove();
+    }
+  }
+
+  function addButtons() {
+    if (document.getElementById(TOOLBAR_ID)) return;
+
+    const toolbar = document.createElement('div');
+    toolbar.id = TOOLBAR_ID;
+
+    const inHeader = !!findHeader();
+    if (inHeader) {
+      // Float at the right edge of the header bar.
+      toolbar.style.cssText = [
+        'position: fixed',
+        'top: 8px',
+        'right: 16px',
+        'z-index: 9999',
+        'display: inline-flex',
+        'align-items: center',
+        'pointer-events: auto',
+      ].join(';');
+    } else {
+      // Fallback: tucked into the top-right corner without overlapping
+      // page content (header is ~52px tall on linkedin).
+      toolbar.style.cssText = [
+        'position: fixed',
+        'top: 8px',
+        'right: 16px',
+        'z-index: 9999',
+        'display: inline-flex',
+        'align-items: center',
+      ].join(';');
+    }
+
+    const formatButton = createIconButton({
       id: FORMAT_BUTTON_ID,
-      text: 'Format for Print',
-      right: 16,
-      background: '#0a66c2',
+      icon: '\uD83D\uDDA8',         // 🖨 printer
+      tooltip: 'Format for Print',
       onClick: enablePrintableMode,
     });
 
-    const resetButton = createButton({
+    const resetButton = createIconButton({
       id: RESET_BUTTON_ID,
-      text: 'Reset View',
-      right: 170,
-      background: '#555',
+      icon: '\u21BA',                // ↺ counterclockwise arrow
+      tooltip: 'Reset View',
       onClick: disablePrintableMode,
     });
+    resetButton.style.display = 'none';  // hidden until Format-for-Print runs
 
-    const markdownButton = createButton({
+    const markdownButton = createIconButton({
       id: MARKDOWN_BUTTON_ID,
-      text: 'Download Markdown',
-      right: 290,
-      background: '#333',
+      icon: '\u2B07',                // ⬇ download
+      tooltip: 'Download Markdown',
       onClick: downloadMarkdown,
     });
 
-    document.body.appendChild(formatButton);
-    document.body.appendChild(resetButton);
-    document.body.appendChild(markdownButton);
+    toolbar.appendChild(formatButton);
+    toolbar.appendChild(resetButton);
+    toolbar.appendChild(markdownButton);
+
+    document.body.appendChild(toolbar);
   }
 
   // ============================================================
@@ -699,6 +844,8 @@
     if (location.href !== lastUrl) {
       lastUrl = location.href;
       disablePrintableMode();
+      const existing = document.getElementById(TOOLBAR_ID);
+      if (existing) existing.remove();
       window.setTimeout(addButtons, 1000);
     }
   });
