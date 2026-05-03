@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.6.0
+// @version      1.6.1
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -230,17 +230,37 @@
   }
 
   /**
+   * Is every scroll container (window + any inner overflow:auto div)
+   * at its bottom edge, within a small tolerance?  Used so we don't
+   * exit auto-scroll while there's still content below.
+   */
+  function isAtBottom(tolerance = 4) {
+    const winBottom = window.innerHeight + window.scrollY;
+    const docH = document.documentElement.scrollHeight;
+    if (winBottom < docH - tolerance) return false;
+
+    for (const el of findScrollables()) {
+      if (el.scrollTop + el.clientHeight < el.scrollHeight - tolerance) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * LinkedIn lazy-loads detail entries via IntersectionObserver as the
-   * user scrolls.  We trigger that loading by repeatedly bringing the
-   * last visible entry into view (works regardless of which element
-   * is the actual scroll container), waiting for new entries to
-   * render, and stopping when the entry count + heights stabilise.
+   * user scrolls.  We loop until BOTH:
+   *   (a) every scroll container is at its bottom, AND
+   *   (b) the entry count + heights have been stable for several ticks.
+   * Either condition alone is insufficient: (a) can be true while a
+   * lazy-load is mid-flight (about to extend the content); (b) can be
+   * true if lazy-loading is slower than our step delay.
    */
   async function autoScrollToLoadAll() {
     const originalY = window.scrollY;
-    const stepDelay = 350;
-    const maxIterations = 60;
-    const stableThreshold = 4;
+    const stepDelay = 400;
+    const maxIterations = 120;
+    const stableThreshold = 5;
 
     let lastFingerprint = '';
     let stableCount = 0;
@@ -248,18 +268,18 @@
 
     console.log('[LinkedIn Printable Format] autoScrollToLoadAll: starting');
 
-    while (stableCount < stableThreshold && iterations < maxIterations) {
-      // Strategy 1: scroll the last entity item into view.  This
-      // delegates to whichever element is actually scrollable and is
-      // the most reliable trigger for LinkedIn's IntersectionObservers.
+    while (iterations < maxIterations) {
+      // Strategy 1: scroll the last entity item into view.  Delegates
+      // to whichever element is actually scrollable.
       const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
       const lastItem = items[items.length - 1];
       if (lastItem) {
         lastItem.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'instant' });
       }
 
-      // Strategy 2: belt-and-suspenders — scroll window and any
-      // discovered inner scrollable container to its max.
+      // Strategy 2: belt-and-suspenders — push every scroll container
+      // (window + every discovered inner overflow:auto element) to its
+      // max scroll position.
       window.scrollTo(0, document.documentElement.scrollHeight);
       for (const el of findScrollables()) {
         el.scrollTop = el.scrollHeight;
@@ -283,14 +303,16 @@
       }
 
       iterations++;
-
-      // Update the busy pill so the user can see progress.
       setBusy(true, `Loading entries\u2026 (${newCount} so far)`);
+
+      // Exit only when stable AND we're actually at the bottom.
+      if (stableCount >= stableThreshold && isAtBottom(8)) {
+        break;
+      }
     }
 
-    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: done after', iterations, 'iterations,', lastFingerprint);
+    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: done after', iterations, 'iterations, fingerprint=', lastFingerprint, 'isAtBottom=', isAtBottom(8));
 
-    // Restore the user's scroll position.
     window.scrollTo({ top: originalY, behavior: 'instant' });
     await new Promise(r => setTimeout(r, 150));
   }
