@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Post Titles
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.2.0
+// @version      1.3.0
 // @description  Replaces generic LinkedIn post tab titles with meaningful ones: "LinkedIn Post - Author - Topic"
 // @author       rpeck
 // @match        https://www.linkedin.com/posts/*
@@ -17,10 +17,17 @@
 
   const MAX_TOPIC_LENGTH = 80;
   const TITLE_PREFIX = 'LinkedIn Post';
+  const SCRIPT_NAME = 'LinkedIn Post Titles';
+  const ERROR_BANNER_ID = 'linkedin-post-titles-error-banner';
+  const LOG_PREFIX = '[LinkedIn Post Titles]';
 
   // Cache the computed title so we can cheaply re-apply it when a
   // sleeping/discarded tab is restored by the browser or a tab manager.
   let cachedTitle = null;
+
+  // Track which extractors found data on the most recent attempt.
+  // Used to surface a clear error if LinkedIn changes its DOM again.
+  let lastExtractionStatus = { author: false, topic: false };
 
   /**
    * Extract JSON-LD structured data from the page
@@ -186,6 +193,8 @@
       || getTopicFromPostBody()
       || getHashtags();
 
+    lastExtractionStatus = { author: !!author, topic: !!topic };
+
     // Build title
     let newTitle = TITLE_PREFIX;
 
@@ -205,6 +214,77 @@
     }
 
     return false;
+  }
+
+  /**
+   * Show a visible error banner when extraction has failed entirely
+   * (most likely cause: LinkedIn changed its DOM again).  Also logs
+   * a structured diagnostic to the console so the user can paste it
+   * into a bug report.
+   */
+  function showSelectorError({ author, topic }) {
+    if (document.getElementById(ERROR_BANNER_ID)) return;
+
+    const failed = [];
+    if (!author) failed.push('author');
+    if (!topic) failed.push('topic');
+
+    const message = `${SCRIPT_NAME}: could not extract ${failed.join(' or ')} — LinkedIn's DOM has likely changed. Tab title was not updated.`;
+
+    console.error(`${LOG_PREFIX} SELECTOR FAILURE`, {
+      url: location.href,
+      missing: failed,
+      hint: 'Selectors used to extract data from LinkedIn posts no longer match. Update the script or report at https://github.com/rpeck/rpeck-monkeyscripts/issues',
+    });
+
+    const banner = document.createElement('div');
+    banner.id = ERROR_BANNER_ID;
+    banner.setAttribute('role', 'alert');
+    banner.style.cssText = [
+      'position: fixed',
+      'top: 12px',
+      'right: 12px',
+      'z-index: 2147483647',
+      'max-width: 420px',
+      'padding: 12px 16px',
+      'background: #b91c1c',
+      'color: #fff',
+      'font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif',
+      'border-radius: 6px',
+      'box-shadow: 0 4px 12px rgba(0,0,0,0.3)',
+      'cursor: default',
+    ].join(';');
+
+    const text = document.createElement('div');
+    text.textContent = message;
+    text.style.marginRight = '24px';
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '\u00d7';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.style.cssText = [
+      'position: absolute',
+      'top: 4px',
+      'right: 8px',
+      'background: transparent',
+      'border: none',
+      'color: #fff',
+      'font-size: 18px',
+      'line-height: 1',
+      'cursor: pointer',
+      'padding: 4px',
+    ].join(';');
+    close.addEventListener('click', () => banner.remove());
+
+    const hint = document.createElement('div');
+    hint.textContent = 'See DevTools console for details.';
+    hint.style.cssText = 'margin-top: 6px; font-size: 11px; opacity: 0.85;';
+
+    banner.appendChild(close);
+    banner.appendChild(text);
+    banner.appendChild(hint);
+    document.body.appendChild(banner);
   }
 
   /**
@@ -234,6 +314,9 @@
       attempts++;
       if (updateTitle() || attempts >= maxAttempts) {
         observer.disconnect();
+        if (!cachedTitle) {
+          showSelectorError(lastExtractionStatus);
+        }
       }
     });
 
@@ -246,6 +329,9 @@
     setTimeout(() => {
       observer.disconnect();
       updateTitle(); // One final attempt
+      if (!cachedTitle) {
+        showSelectorError(lastExtractionStatus);
+      }
     }, 10000);
   }
 
