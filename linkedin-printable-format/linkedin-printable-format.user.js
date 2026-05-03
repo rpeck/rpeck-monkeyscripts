@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.7.1
+// @version      1.7.2
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -256,18 +256,23 @@
     const chunkPx = Math.max(Math.round(window.innerHeight * 0.8), 400);
     const stepDelay = 280;
     const maxIterations = 300;
-    // Once we've reached the page bottom, only require the entity
-    // count to be stable for this many ticks before exiting.  The
-    // inner-scrollable state isn't checked because LinkedIn renders
-    // transient overflow:auto elements (overlays, comment boxes) that
-    // appear/disappear between iterations and would otherwise reset
-    // the stability counter forever.
-    const bottomStableThreshold = 3;
 
-    let stableCount = 0;
+    // Two parallel "stuck" counters.  Both must reach this threshold
+    // simultaneously before we exit.  Required because:
+    //   - Entry count alone can plateau briefly mid-page if a batch
+    //     finished loading and the next one hasn't been triggered yet.
+    //   - scrollY alone can stop advancing temporarily when LinkedIn
+    //     pauses rendering, even though more content is on the way.
+    // 8 iterations * 280ms ~= 2.2s of nothing happening = done.
+    const stuckThreshold = 8;
+
+    let stuckScrollCount = 0;
+    let stuckCountCount = 0;
+    let lastY = -1;
+    let lastScrollHeight = -1;
     let lastCount = -1;
     let iterations = 0;
-    let bottomFirstReachedAt = null;
+    let firstBottomIter = null;
 
     console.log('[LinkedIn Printable Format] autoScrollToLoadAll: starting; viewport=' +
       window.innerHeight + 'px, chunk=' + chunkPx + 'px, initial scrollHeight=' +
@@ -278,15 +283,16 @@
       window.scrollBy(0, chunkPx);
 
       // Advance any inner overflow:auto/scroll containers in case the
-      // page's scroll is delegated to an inner element we missed.
-      // We don't include their state in the stability check (see above).
+      // page's scroll is delegated to one we missed.  These don't
+      // factor into the exit decision (their state flaps because of
+      // transient overlays / comment boxes), but advancing them
+      // triggers their lazy-loaders.
       const inners = findScrollables();
       for (const el of inners) {
         el.scrollBy ? el.scrollBy(0, chunkPx) : (el.scrollTop += chunkPx);
       }
 
-      // If the window didn't move (delegated scroll), force the last
-      // item into view.
+      // Window didn't move?  Delegate via last-item.scrollIntoView.
       if (window.scrollY === beforeY) {
         const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
         const lastItem = items[items.length - 1];
@@ -300,43 +306,56 @@
 
       const y = window.scrollY;
       const maxY = maxDocScrollY();
+      const docH = document.documentElement.scrollHeight;
       const count = document.querySelectorAll('[componentkey^="entity-collection-item"]').length;
 
       iterations++;
 
       const atBottom = y >= maxY - 8;
-      if (atBottom && bottomFirstReachedAt === null) {
-        bottomFirstReachedAt = iterations;
+      if (atBottom && firstBottomIter === null) {
+        firstBottomIter = iterations;
         console.log(`[LinkedIn Printable Format] reached bottom at iter ${iterations}: scrollY=${y}/${maxY}, entries=${count}`);
       }
 
-      if (iterations <= 10 || iterations % 5 === 0) {
-        console.log(`[LinkedIn Printable Format] iter ${iterations}: y=${y}/${maxY}, entries=${count}, atBottom=${atBottom}, stable=${stableCount}`);
-      }
-
-      // Stability is judged on entry count only, and only counts once
-      // we've reached the bottom.
-      if (atBottom) {
-        if (count === lastCount) {
-          stableCount++;
-        } else {
-          stableCount = 0;
-        }
+      // Two independent "stuck" counters.
+      const scrollMoved = (y !== lastY) || (docH !== lastScrollHeight);
+      if (scrollMoved) {
+        stuckScrollCount = 0;
       } else {
-        stableCount = 0;
+        stuckScrollCount++;
       }
+      if (count === lastCount) {
+        stuckCountCount++;
+      } else {
+        stuckCountCount = 0;
+      }
+      lastY = y;
+      lastScrollHeight = docH;
       lastCount = count;
+
+      if (iterations <= 12 || iterations % 5 === 0) {
+        console.log(`[LinkedIn Printable Format] iter ${iterations}: y=${y}/${maxY}, docH=${docH}, entries=${count}, stuckScroll=${stuckScrollCount}, stuckCount=${stuckCountCount}, atBottom=${atBottom}`);
+      }
 
       setBusy(true, `Loading entries\u2026 (${count} so far)`);
 
-      if (atBottom && stableCount >= bottomStableThreshold) {
-        console.log(`[LinkedIn Printable Format] exit: atBottom and entry count stable for ${stableCount} iters (entries=${count})`);
+      // Exit when:
+      //   - scroll position + page height haven't changed for a while
+      //   - entity count hasn't changed for a while
+      //   - we've reached the bottom at least once
+      // All three required: page-height and count plateauing
+      // independently, but the visible scroll has truly hit max.
+      if (firstBottomIter !== null
+          && stuckScrollCount >= stuckThreshold
+          && stuckCountCount >= stuckThreshold) {
+        console.log(`[LinkedIn Printable Format] exit: atBottom + scroll stuck for ${stuckScrollCount} + count stuck for ${stuckCountCount} (entries=${count})`);
         break;
       }
     }
 
     console.log('[LinkedIn Printable Format] autoScrollToLoadAll: done after',
-      iterations, 'iterations; final scrollY=' + window.scrollY,
+      iterations, 'iterations; final scrollY=' + window.scrollY +
+      '/' + maxDocScrollY(),
       'final scrollHeight=' + document.documentElement.scrollHeight,
       'final entry count=' + document.querySelectorAll('[componentkey^="entity-collection-item"]').length);
 
