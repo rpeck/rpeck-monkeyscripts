@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.5.1
+// @version      1.6.0
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -211,43 +211,88 @@
   }
 
   /**
-   * LinkedIn lazy-loads detail entries as the user scrolls.  Programmatically
-   * scroll to the bottom in chunks, waiting for content to settle, then back
-   * to the top.  Triggers IntersectionObserver-based loading so we capture
-   * every entry before extracting markdown or applying print mode.
+   * Find every scrollable element in the page (overflow:auto/scroll
+   * with non-trivial scrollable height).  LinkedIn sometimes nests
+   * the actual scroll container inside main, so window.scrollTo alone
+   * doesn't trigger lazy-load.
+   */
+  function findScrollables() {
+    const out = [];
+    const all = document.querySelectorAll('main, [role="main"], div, section');
+    for (const el of all) {
+      const style = window.getComputedStyle(el);
+      const oy = style.overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 100) {
+        out.push(el);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * LinkedIn lazy-loads detail entries via IntersectionObserver as the
+   * user scrolls.  We trigger that loading by repeatedly bringing the
+   * last visible entry into view (works regardless of which element
+   * is the actual scroll container), waiting for new entries to
+   * render, and stopping when the entry count + heights stabilise.
    */
   async function autoScrollToLoadAll() {
     const originalY = window.scrollY;
-    const stepDelay = 200;
-    const maxIterations = 80;
+    const stepDelay = 350;
+    const maxIterations = 60;
     const stableThreshold = 4;
 
-    let lastHeight = 0;
+    let lastFingerprint = '';
     let stableCount = 0;
     let iterations = 0;
 
+    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: starting');
+
     while (stableCount < stableThreshold && iterations < maxIterations) {
+      // Strategy 1: scroll the last entity item into view.  This
+      // delegates to whichever element is actually scrollable and is
+      // the most reliable trigger for LinkedIn's IntersectionObservers.
+      const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
+      const lastItem = items[items.length - 1];
+      if (lastItem) {
+        lastItem.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'instant' });
+      }
+
+      // Strategy 2: belt-and-suspenders — scroll window and any
+      // discovered inner scrollable container to its max.
       window.scrollTo(0, document.documentElement.scrollHeight);
-      // Click any "see more" buttons that became visible during the scroll
+      for (const el of findScrollables()) {
+        el.scrollTop = el.scrollHeight;
+      }
+
+      // Strategy 3: click any "see more" buttons that became visible
       expandSeeMoreButtons();
+
       await new Promise(r => setTimeout(r, stepDelay));
 
-      const currentHeight = document.documentElement.scrollHeight;
-      const itemCount = document.querySelectorAll('[componentkey^="entity-collection-item"]').length;
-      const fingerprint = currentHeight + ':' + itemCount;
-      if (fingerprint === lastHeight) {
+      const newCount = document.querySelectorAll('[componentkey^="entity-collection-item"]').length;
+      const docH = document.documentElement.scrollHeight;
+      const bodyH = document.body.scrollHeight;
+      const fingerprint = `${newCount}:${docH}:${bodyH}`;
+
+      if (fingerprint === lastFingerprint) {
         stableCount++;
       } else {
         stableCount = 0;
-        lastHeight = fingerprint;
+        lastFingerprint = fingerprint;
       }
+
       iterations++;
+
+      // Update the busy pill so the user can see progress.
+      setBusy(true, `Loading entries\u2026 (${newCount} so far)`);
     }
+
+    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: done after', iterations, 'iterations,', lastFingerprint);
 
     // Restore the user's scroll position.
     window.scrollTo({ top: originalY, behavior: 'instant' });
-    // Give the layout a moment to settle after the scroll-back.
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 150));
   }
 
   function findContentContainer() {
