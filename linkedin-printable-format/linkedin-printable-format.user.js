@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.7.0
+// @version      1.7.1
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -256,33 +256,37 @@
     const chunkPx = Math.max(Math.round(window.innerHeight * 0.8), 400);
     const stepDelay = 280;
     const maxIterations = 300;
-    const stableThreshold = 6;
+    // Once we've reached the page bottom, only require the entity
+    // count to be stable for this many ticks before exiting.  The
+    // inner-scrollable state isn't checked because LinkedIn renders
+    // transient overflow:auto elements (overlays, comment boxes) that
+    // appear/disappear between iterations and would otherwise reset
+    // the stability counter forever.
+    const bottomStableThreshold = 3;
 
     let stableCount = 0;
-    let lastY = -1;
     let lastCount = -1;
-    let lastInnerScrollState = '';
     let iterations = 0;
+    let bottomFirstReachedAt = null;
 
     console.log('[LinkedIn Printable Format] autoScrollToLoadAll: starting; viewport=' +
       window.innerHeight + 'px, chunk=' + chunkPx + 'px, initial scrollHeight=' +
       document.documentElement.scrollHeight);
 
     while (iterations < maxIterations) {
-      // Scroll the window down by a viewport chunk.
       const beforeY = window.scrollY;
       window.scrollBy(0, chunkPx);
 
-      // Also advance any inner overflow:auto/scroll containers, in
-      // case the actual scrollable element isn't the window.
+      // Advance any inner overflow:auto/scroll containers in case the
+      // page's scroll is delegated to an inner element we missed.
+      // We don't include their state in the stability check (see above).
       const inners = findScrollables();
       for (const el of inners) {
         el.scrollBy ? el.scrollBy(0, chunkPx) : (el.scrollTop += chunkPx);
       }
 
-      // If even after scrollBy the window didn't move, fall back to
-      // last-item.scrollIntoView — handles cases where the page's
-      // scroll is delegated to an inner element we missed.
+      // If the window didn't move (delegated scroll), force the last
+      // item into view.
       if (window.scrollY === beforeY) {
         const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
         const lastItem = items[items.length - 1];
@@ -297,35 +301,36 @@
       const y = window.scrollY;
       const maxY = maxDocScrollY();
       const count = document.querySelectorAll('[componentkey^="entity-collection-item"]').length;
-      const innerScrollState = inners.map(el => `${el.scrollTop}/${el.scrollHeight - el.clientHeight}`).join(',');
 
       iterations++;
 
-      // Per-iteration diagnostic.
-      if (iterations <= 10 || iterations % 5 === 0) {
-        console.log(`[LinkedIn Printable Format] iter ${iterations}: y=${y}/${maxY} (window), inners=[${innerScrollState}], entries=${count}`);
+      const atBottom = y >= maxY - 8;
+      if (atBottom && bottomFirstReachedAt === null) {
+        bottomFirstReachedAt = iterations;
+        console.log(`[LinkedIn Printable Format] reached bottom at iter ${iterations}: scrollY=${y}/${maxY}, entries=${count}`);
       }
 
-      const atBottomWindow = y >= maxY - 8;
-      const atBottomInner = inners.every(el => el.scrollTop + el.clientHeight >= el.scrollHeight - 8);
-      const atBottom = atBottomWindow && atBottomInner;
+      if (iterations <= 10 || iterations % 5 === 0) {
+        console.log(`[LinkedIn Printable Format] iter ${iterations}: y=${y}/${maxY}, entries=${count}, atBottom=${atBottom}, stable=${stableCount}`);
+      }
 
-      if (y === lastY && count === lastCount && innerScrollState === lastInnerScrollState) {
-        stableCount++;
+      // Stability is judged on entry count only, and only counts once
+      // we've reached the bottom.
+      if (atBottom) {
+        if (count === lastCount) {
+          stableCount++;
+        } else {
+          stableCount = 0;
+        }
       } else {
         stableCount = 0;
       }
-      lastY = y;
       lastCount = count;
-      lastInnerScrollState = innerScrollState;
 
       setBusy(true, `Loading entries\u2026 (${count} so far)`);
 
-      // Exit when both at-bottom AND nothing has changed for several
-      // iterations.  The stable-count safety net handles edge cases
-      // where atBottom is true but a fetch is still in-flight.
-      if (atBottom && stableCount >= stableThreshold) {
-        console.log(`[LinkedIn Printable Format] exit: atBottom + stable for ${stableCount} iters`);
+      if (atBottom && stableCount >= bottomStableThreshold) {
+        console.log(`[LinkedIn Printable Format] exit: atBottom and entry count stable for ${stableCount} iters (entries=${count})`);
         break;
       }
     }
