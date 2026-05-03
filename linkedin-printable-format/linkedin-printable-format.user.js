@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.7.2
+// @version      1.8.0
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
@@ -184,183 +184,617 @@
   // Print Mode
   // ============================================================
 
-  function expandSeeMoreButtons() {
-    const buttons = [...document.querySelectorAll('button')];
+  // ============================================================
+  // Auto-scroll: empirical scroll-container discovery (v1.8.0)
+  // ============================================================
+  //
+  // ROOT CAUSE OF v1.5.0-v1.7.2 FAILURES (per LLM council Gemini-3-Pro
+  // + GPT-5.2):
+  //   LinkedIn detail pages do NOT scroll on `window`.  They use an
+  //   "app-shell" layout where document.body has `overflow: hidden`
+  //   and an inner element (typically `.scaffold-layout__main` or
+  //   `<main>`) is the actual scroll container.
+  //
+  //   - window.scrollBy / window.scrollTo did nothing
+  //   - maxDocScrollY() returned ~0
+  //   - the at-bottom check fired on iteration 1
+  //   - both stuck counters reached threshold in ~2 seconds
+  //   - exit gate fired before any lazy-load could trigger
+  //
+  //   findScrollables() also missed the real container: its filter
+  //   only matched overflow-y:auto|scroll, but LinkedIn uses overlay
+  //   (Chromium) or sized-with-no-overflow-style elements that scroll
+  //   programmatically anyway.
+  //
+  // FIX: stop guessing from CSS.  EMPIRICALLY discover the scroll
+  // container by probing candidates: try to scroll each one, and
+  // measure whether (a) scrollTop actually moves and (b) entity count
+  // grows after the scroll.  Score and pick the best.
+  //
+  // Diagnostic logging is intentionally verbose for v1.8.0 - if this
+  // still misbehaves the user can paste console output back and we
+  // can see exactly which element is the scroll container, what its
+  // metrics are, and where the loop terminated.
+  // ============================================================
 
-    for (const button of buttons) {
-      const text = (
-        button.innerText ||
-        button.getAttribute('aria-label') ||
-        ''
-      ).toLowerCase();
+  const LPF_DEBUG = true;  // verbose logging while we stabilize this
 
-      if (
+  function lpfLog(...args) {
+    if (LPF_DEBUG) console.log('[LinkedIn Printable Format]', ...args);
+  }
+
+  function lpfWarn(...args) {
+    console.warn('[LinkedIn Printable Format]', ...args);
+  }
+
+  /** Render an element as a short selector chain for diagnostics. */
+  function lpfElPath(el) {
+    if (!el) return '<null>';
+    if (el === window) return 'window';
+    if (el === document) return 'document';
+    if (el === document.documentElement) return 'html';
+    if (el === document.body) return 'body';
+    const parts = [];
+    let cur = el;
+    for (let i = 0; cur && cur.nodeType === 1 && i < 5; i++) {
+      let p = cur.tagName ? cur.tagName.toLowerCase() : 'node';
+      if (cur.id) p += '#' + cur.id;
+      const cls = (typeof cur.className === 'string' && cur.className.trim())
+        ? cur.className.trim().split(/\s+/).slice(0, 2).join('.')
+        : '';
+      if (cls) p += '.' + cls;
+      const role = cur.getAttribute && cur.getAttribute('role');
+      if (role) p += `[role="${role}"]`;
+      parts.push(p);
+      cur = cur.parentElement;
+    }
+    return parts.join(' < ');
+  }
+
+  function lpfIsVisible(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const s = window.getComputedStyle(el);
+    if (s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0') return false;
+    return true;
+  }
+
+  function lpfSleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+  }
+
+  async function lpfWaitForPaint(ms) {
+    await new Promise(requestAnimationFrame);
+    if (ms > 0) await lpfSleep(ms);
+  }
+
+  /**
+   * Narrow the search for entity items + load-more buttons to the
+   * detail-section root, so we don't pick up sidebar collections,
+   * "People also viewed", or other off-section duplicates.  Falls back
+   * to <main> / body so callers always get a non-null scope.
+   */
+  function findEntityScopeRoot() {
+    return document.querySelector('[componentkey*="DetailsSection"]')
+      || document.querySelector('[data-component-type="LazyColumn"]')
+      || document.querySelector('.scaffold-layout__main')
+      || document.querySelector('main')
+      || document.body;
+  }
+
+  function getEntityItems(scopeEl) {
+    const root = scopeEl || document;
+    return root.querySelectorAll('[componentkey^="entity-collection-item"]');
+  }
+
+  /**
+   * Uniform scroll-metric reader.  Treats `window` and Element
+   * identically so the rest of the loop doesn't have to branch on
+   * which scroller was discovered.
+   */
+  function getScrollMetrics(scroller) {
+    if (scroller === window) {
+      const doc = document.documentElement;
+      const body = document.body;
+      const scrollTop = window.scrollY;
+      const clientHeight = window.innerHeight;
+      const scrollHeight = Math.max(doc.scrollHeight, body ? body.scrollHeight : 0);
+      return {
+        scrollTop,
+        clientHeight,
+        scrollHeight,
+        maxScrollTop: Math.max(0, scrollHeight - clientHeight),
+      };
+    }
+    return {
+      scrollTop: scroller.scrollTop,
+      clientHeight: scroller.clientHeight,
+      scrollHeight: scroller.scrollHeight,
+      maxScrollTop: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+    };
+  }
+
+  function setScrollTop(scroller, top) {
+    if (scroller === window) {
+      window.scrollTo(0, top);
+    } else {
+      scroller.scrollTop = top;
+    }
+  }
+
+  function scrollByChunk(scroller, dy) {
+    if (scroller === window) {
+      window.scrollBy(0, dy);
+    } else {
+      scroller.scrollTop = Math.min(scroller.scrollTop + dy, scroller.scrollHeight);
+    }
+  }
+
+  function isAtBottom(scroller, tolerancePx = 12) {
+    const m = getScrollMetrics(scroller);
+    return m.scrollTop >= m.maxScrollTop - tolerancePx;
+  }
+
+  /**
+   * BIDIRECTIONAL probe (per Gemini's edge-case warning): try to move
+   * `scroller` and verify scrollTop actually changes.  We try down
+   * first; if scrollTop doesn't change AND it's already at bottom,
+   * we try up.  This avoids falsely rejecting a true scroll
+   * container that happens to already be at its maximum.
+   */
+  async function probeMovement(scroller, label) {
+    const before = getScrollMetrics(scroller);
+    const startTop = before.scrollTop;
+
+    // Try down.
+    setScrollTop(scroller, startTop + 200);
+    await lpfWaitForPaint(40);
+    let mid = getScrollMetrics(scroller);
+    let movedDown = Math.abs(mid.scrollTop - startTop) > 2;
+
+    // If down failed and we're at/near max already, try up.
+    let movedUp = false;
+    if (!movedDown && before.maxScrollTop > 0 && startTop >= before.maxScrollTop - 4) {
+      setScrollTop(scroller, Math.max(0, startTop - 200));
+      await lpfWaitForPaint(40);
+      mid = getScrollMetrics(scroller);
+      movedUp = Math.abs(mid.scrollTop - startTop) > 2;
+    }
+
+    // Restore close to original position.
+    setScrollTop(scroller, startTop);
+    await lpfWaitForPaint(20);
+
+    const moved = movedDown || movedUp;
+    lpfLog(`probe-move[${label}]`, {
+      scroller: lpfElPath(scroller),
+      startTop,
+      maxScrollTop: before.maxScrollTop,
+      scrollHeight: before.scrollHeight,
+      clientHeight: before.clientHeight,
+      movedDown,
+      movedUp,
+      moved,
+    });
+    return moved;
+  }
+
+  /**
+   * Stronger probe: scroll candidate to bottom, wait, see if either
+   * scrollTop changed OR entity count grew.  Score result.
+   */
+  async function probeScrollerCandidate(scroller, scopeEl, label) {
+    const before = getScrollMetrics(scroller);
+    const beforeCount = getEntityItems(scopeEl).length;
+
+    // Snapshot original position so we can restore.
+    const origTop = before.scrollTop;
+
+    // Try moving fully (scrollTop = MAX) — also triggers maximum
+    // possible IntersectionObserver fires for lazy-load.
+    setScrollTop(scroller, Number.MAX_SAFE_INTEGER);
+    await lpfWaitForPaint(280);
+
+    const after = getScrollMetrics(scroller);
+    const afterCount = getEntityItems(scopeEl).length;
+
+    // If MAX-jump didn't move it AND it wasn't already at bottom,
+    // bidirectional probe to confirm whether it's truly stuck.
+    let bidirectionalMoved = false;
+    if (Math.abs(after.scrollTop - origTop) <= 2
+        && origTop < before.maxScrollTop - 4) {
+      bidirectionalMoved = await probeMovement(scroller, label + ':bi');
+    }
+
+    const moved = Math.abs(after.scrollTop - origTop) > 2 || bidirectionalMoved;
+    const countGrew = afterCount > beforeCount;
+    const heightGrew = after.scrollHeight > before.scrollHeight + 2;
+
+    // Restore
+    setScrollTop(scroller, origTop);
+    await lpfWaitForPaint(20);
+
+    const score = (moved ? 2 : 0) + (countGrew ? 3 : 0) + (heightGrew ? 1 : 0);
+
+    lpfLog(`probe-cand[${label}]`, {
+      scroller: lpfElPath(scroller),
+      before,
+      after,
+      beforeCount,
+      afterCount,
+      moved,
+      countGrew,
+      heightGrew,
+      score,
+    });
+
+    return { scroller, moved, countGrew, heightGrew, score };
+  }
+
+  /**
+   * Walk up from the LAST entity item and find the nearest ancestor
+   * whose scrollHeight > clientHeight AND whose scrollTop responds to
+   * programmatic writes.  This is the most reliable signal: the
+   * lazy-load IntersectionObserver is observing an ancestor of the
+   * items, so the items' nearest scrollable ancestor IS the right
+   * container.
+   */
+  async function findNearestScrollerFromLastItem(scopeEl) {
+    const items = getEntityItems(scopeEl);
+    const last = items[items.length - 1];
+    if (!last) {
+      lpfLog('walk-up: no entity items yet, skipping ancestor walk');
+      return null;
+    }
+
+    let cur = last.parentElement;
+    for (let depth = 0; cur && depth < 15 && cur !== document.documentElement; depth++) {
+      const m = getScrollMetrics(cur);
+      if (m.scrollHeight > m.clientHeight + 60) {
+        const moved = await probeMovement(cur, `walk-up depth=${depth}`);
+        if (moved) {
+          lpfLog('walk-up: found scrollable ancestor', {
+            depth,
+            el: lpfElPath(cur),
+            metrics: m,
+          });
+          return cur;
+        }
+      }
+      cur = cur.parentElement;
+    }
+
+    lpfLog('walk-up: no scrollable ancestor found from last item');
+    return null;
+  }
+
+  /**
+   * Empirically pick the real scroll container.  Combines:
+   *   1. nearest scrollable ancestor of the last entity item (highest
+   *      signal)
+   *   2. window
+   *   3. structural guesses (.scaffold-layout__main, main, etc.)
+   *
+   * Each candidate gets probed for movement + correlation with entity
+   * growth.  Highest score wins.
+   */
+  async function discoverScrollContainer(scopeEl) {
+    const candidates = [];
+
+    const nearest = await findNearestScrollerFromLastItem(scopeEl);
+    if (nearest) candidates.push({ scroller: nearest, label: 'walk-up' });
+
+    candidates.push({ scroller: window, label: 'window' });
+
+    const selectors = [
+      '.scaffold-layout__main',
+      '.scaffold-layout__content',
+      'main',
+      '[role="main"]',
+      '#main',
+      '.application-outlet',
+      '.authentication-outlet',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) candidates.push({ scroller: el, label: sel });
+    }
+
+    // De-duplicate by identity while preserving order.
+    const seen = new Set();
+    const uniq = [];
+    for (const c of candidates) {
+      const key = c.scroller === window ? 'window' : c.scroller;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniq.push(c);
+    }
+
+    const results = [];
+    for (const c of uniq) {
+      try {
+        const r = await probeScrollerCandidate(c.scroller, scopeEl, c.label);
+        results.push(r);
+      } catch (e) {
+        lpfWarn('probe failed for', c.label, lpfElPath(c.scroller), e);
+      }
+    }
+
+    results.sort((a, b) => b.score - a.score);
+
+    lpfLog('scroller discovery results',
+      results.map(r => ({
+        scroller: lpfElPath(r.scroller),
+        score: r.score,
+        moved: r.moved,
+        countGrew: r.countGrew,
+        heightGrew: r.heightGrew,
+      })));
+
+    if (!results.length || results[0].score === 0) {
+      lpfWarn('no effective scroller found; falling back to window');
+      return window;
+    }
+    return results[0].scroller;
+  }
+
+  // ============================================================
+  // "Load more" / "Show all" pagination button detection
+  // ============================================================
+  //
+  // The previous text-only matcher missed buttons that:
+  //   - have icon-only labels
+  //   - use localized strings
+  //   - are <a role="button"> instead of <button>
+  //   - have aria-label like "Show 25 more experiences"
+  //
+  // We now try BOTH structural detection (class name patterns,
+  // aria-controls, role="button") AND the legacy text matching, so
+  // either one alone is sufficient.
+
+  function findLoadMoreButtons(scopeEl) {
+    const root = scopeEl || document;
+    const candidates = root.querySelectorAll(
+      'button, a[role="button"], [role="button"]'
+    );
+
+    const out = [];
+    for (const el of candidates) {
+      if (!lpfIsVisible(el)) continue;
+      if (el.id === FORMAT_BUTTON_ID || el.id === RESET_BUTTON_ID || el.id === MARKDOWN_BUTTON_ID) continue;
+      if (el.getAttribute('aria-disabled') === 'true') continue;
+      if (el.disabled) continue;
+
+      const cls = (typeof el.className === 'string') ? el.className.toLowerCase() : '';
+      const text = ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+
+      // Structural signals.
+      const looksLinkedInLoadMore = cls.includes('scaffold-finite-scroll')
+        || cls.includes('show-more-less')
+        || cls.includes('inline-show-more-text');
+
+      // Text signals (preserved from prior versions, broadened).
+      const matchesText = (
         text.includes('see more') ||
         text.includes('show more') ||
         text.includes('show all') ||
+        text.includes('load more') ||
         text.includes('more experiences') ||
         text.includes('more education') ||
         text.includes('more licenses') ||
         text.includes('more certifications') ||
         text.includes('more projects') ||
-        text.includes('more skills')
-      ) {
-        button.click();
-      }
-    }
-  }
+        text.includes('more skills') ||
+        /show\s+\d+\s+more/i.test(text) ||
+        /\bload\s+\d+\s+more/i.test(text)
+      );
 
-  /**
-   * Find every scrollable element in the page (overflow:auto/scroll
-   * with non-trivial scrollable height).  LinkedIn sometimes nests
-   * the actual scroll container inside main, so window.scrollTo alone
-   * doesn't trigger lazy-load.
-   */
-  function findScrollables() {
-    const out = [];
-    const all = document.querySelectorAll('main, [role="main"], div, section');
-    for (const el of all) {
-      const style = window.getComputedStyle(el);
-      const oy = style.overflowY;
-      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 100) {
+      if (looksLinkedInLoadMore || matchesText) {
         out.push(el);
       }
     }
     return out;
   }
 
-  /**
-   * Maximum scroll position reachable on the page or any inner
-   * scrollable element.  Treats document scroll and inner-element
-   * scroll uniformly so we can answer "have we hit the bottom?"
-   * for whichever element actually scrolls.
-   */
-  function maxDocScrollY() {
-    return Math.max(
-      document.documentElement.scrollHeight - window.innerHeight,
-      document.body.scrollHeight - window.innerHeight,
-      0,
-    );
+  async function clickLoadMoreButtons(scopeEl) {
+    const btns = findLoadMoreButtons(scopeEl);
+    let clicked = 0;
+    for (const b of btns) {
+      try {
+        b.click();
+        clicked++;
+        lpfLog('clicked load-more candidate', {
+          el: lpfElPath(b),
+          ariaLabel: b.getAttribute('aria-label') || null,
+          text: (b.innerText || '').slice(0, 80),
+        });
+      } catch (e) {
+        lpfWarn('click failed', lpfElPath(b), e);
+      }
+    }
+    if (clicked) await lpfWaitForPaint(250);
+    return clicked;
   }
 
   /**
-   * Incrementally scroll the page in viewport-sized chunks until both
-   * (a) scrollY can't advance any further, and (b) the entity count
-   * stops growing.  Jumping straight to scrollHeight skips past
-   * intermediate items and can starve LinkedIn's IntersectionObserver
-   * of trigger events; chunked scrolling forces every entry to pass
-   * through the viewport.
+   * Legacy text-only expansion (kept so callers outside the loop —
+   * downloadMarkdown, enablePrintableMode — still hit known buttons).
+   * Internally now delegates to clickLoadMoreButtons() which also
+   * captures buttons that the legacy pass missed.
    */
+  async function expandSeeMoreButtons() {
+    return await clickLoadMoreButtons(findEntityScopeRoot());
+  }
+
+  // ============================================================
+  // autoScrollToLoadAll: empirical scroller + structural buttons +
+  // hard time cap
+  // ============================================================
+
   async function autoScrollToLoadAll() {
-    const originalY = window.scrollY;
+    const scopeEl = findEntityScopeRoot();
+    const originalWindowY = window.scrollY;
+
+    lpfLog('autoScrollToLoadAll: starting', {
+      url: location.href,
+      readyState: document.readyState,
+      scope: lpfElPath(scopeEl),
+      initialItems: getEntityItems(scopeEl).length,
+      initialWindow: getScrollMetrics(window),
+    });
+
+    // Pre-scroll a little to encourage the first lazy-load batch so
+    // the entity-item walk-up has something to anchor on.
+    try { window.scrollBy(0, 600); } catch (_) {}
+    await lpfWaitForPaint(200);
+
+    const scroller = await discoverScrollContainer(scopeEl);
+    const originalScrollerTop = scroller === window ? window.scrollY : scroller.scrollTop;
+    lpfLog('autoScrollToLoadAll: chosen scroller', {
+      scroller: lpfElPath(scroller),
+      initialMetrics: getScrollMetrics(scroller),
+    });
+
     const chunkPx = Math.max(Math.round(window.innerHeight * 0.8), 400);
-    const stepDelay = 280;
-    const maxIterations = 300;
+    const stepDelay = 250;
 
-    // Two parallel "stuck" counters.  Both must reach this threshold
-    // simultaneously before we exit.  Required because:
-    //   - Entry count alone can plateau briefly mid-page if a batch
-    //     finished loading and the next one hasn't been triggered yet.
-    //   - scrollY alone can stop advancing temporarily when LinkedIn
-    //     pauses rendering, even though more content is on the way.
-    // 8 iterations * 280ms ~= 2.2s of nothing happening = done.
-    const stuckThreshold = 8;
+    // Tuning constants
+    const maxMs = 30000;                  // hard cap (was 30s hang in v1.7.0)
+    const bottomStableNeeded = 6;         // ~1.5s of stable bottom
+    const growthStableNeeded = 6;         // ~1.5s of no growth
+    const startT = performance.now();
 
-    let stuckScrollCount = 0;
-    let stuckCountCount = 0;
-    let lastY = -1;
-    let lastScrollHeight = -1;
-    let lastCount = -1;
-    let iterations = 0;
-    let firstBottomIter = null;
+    let iter = 0;
+    let bottomStable = 0;
+    let noGrowthStable = 0;
+    let lastCount = getEntityItems(scopeEl).length;
+    let lastScrollHeight = getScrollMetrics(scroller).scrollHeight;
+    let lastMaxScrollTop = getScrollMetrics(scroller).maxScrollTop;
+    let buttonsClickedTotal = 0;
+    let exitReason = 'maxMs-cap';
 
-    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: starting; viewport=' +
-      window.innerHeight + 'px, chunk=' + chunkPx + 'px, initial scrollHeight=' +
-      document.documentElement.scrollHeight);
+    while ((performance.now() - startT) < maxMs) {
+      iter++;
 
-    while (iterations < maxIterations) {
-      const beforeY = window.scrollY;
-      window.scrollBy(0, chunkPx);
+      // 1. Click any pagination / "show all N" buttons in scope.
+      const clicked = await clickLoadMoreButtons(scopeEl);
+      buttonsClickedTotal += clicked;
 
-      // Advance any inner overflow:auto/scroll containers in case the
-      // page's scroll is delegated to one we missed.  These don't
-      // factor into the exit decision (their state flaps because of
-      // transient overlays / comment boxes), but advancing them
-      // triggers their lazy-loaders.
-      const inners = findScrollables();
-      for (const el of inners) {
-        el.scrollBy ? el.scrollBy(0, chunkPx) : (el.scrollTop += chunkPx);
+      // 2. Advance the chosen scroller.
+      const before = getScrollMetrics(scroller);
+      scrollByChunk(scroller, chunkPx);
+
+      // 3. Belt-and-suspenders: also nudge window in case there's a
+      //    secondary outer scroll that contributes to viewport-driven
+      //    IntersectionObservers.
+      if (scroller !== window) {
+        try { window.scrollBy(0, chunkPx); } catch (_) {}
       }
 
-      // Window didn't move?  Delegate via last-item.scrollIntoView.
-      if (window.scrollY === beforeY) {
-        const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
-        const lastItem = items[items.length - 1];
-        if (lastItem) {
+      // 4. Final fallback: scrollIntoView the last item.  Only a
+      //    nudge - the chosen scroller is doing the real work.
+      const items = getEntityItems(scopeEl);
+      const lastItem = items[items.length - 1];
+      if (lastItem) {
+        try {
           lastItem.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'instant' });
-        }
+        } catch (_) {}
       }
 
-      expandSeeMoreButtons();
-      await new Promise(r => setTimeout(r, stepDelay));
+      await lpfWaitForPaint(stepDelay);
 
-      const y = window.scrollY;
-      const maxY = maxDocScrollY();
-      const docH = document.documentElement.scrollHeight;
-      const count = document.querySelectorAll('[componentkey^="entity-collection-item"]').length;
+      const after = getScrollMetrics(scroller);
+      const count = items.length;
+      const atBottomNow = isAtBottom(scroller, 12);
 
-      iterations++;
+      const grew = (count > lastCount)
+        || (after.scrollHeight > lastScrollHeight + 2)
+        || (after.maxScrollTop > lastMaxScrollTop + 2);
 
-      const atBottom = y >= maxY - 8;
-      if (atBottom && firstBottomIter === null) {
-        firstBottomIter = iterations;
-        console.log(`[LinkedIn Printable Format] reached bottom at iter ${iterations}: scrollY=${y}/${maxY}, entries=${count}`);
-      }
+      if (atBottomNow) bottomStable++; else bottomStable = 0;
+      if (grew) noGrowthStable = 0; else noGrowthStable++;
 
-      // Two independent "stuck" counters.
-      const scrollMoved = (y !== lastY) || (docH !== lastScrollHeight);
-      if (scrollMoved) {
-        stuckScrollCount = 0;
-      } else {
-        stuckScrollCount++;
-      }
-      if (count === lastCount) {
-        stuckCountCount++;
-      } else {
-        stuckCountCount = 0;
-      }
-      lastY = y;
-      lastScrollHeight = docH;
       lastCount = count;
+      lastScrollHeight = after.scrollHeight;
+      lastMaxScrollTop = after.maxScrollTop;
 
-      if (iterations <= 12 || iterations % 5 === 0) {
-        console.log(`[LinkedIn Printable Format] iter ${iterations}: y=${y}/${maxY}, docH=${docH}, entries=${count}, stuckScroll=${stuckScrollCount}, stuckCount=${stuckCountCount}, atBottom=${atBottom}`);
+      // Verbose first 12 iters, then every 4th.  Always log when
+      // material state changes (clicks, growth, hitting bottom).
+      if (iter <= 12 || iter % 4 === 0 || clicked || grew) {
+        lpfLog(`iter ${iter}`, {
+          ms: Math.round(performance.now() - startT),
+          scroller: lpfElPath(scroller),
+          before,
+          after,
+          count,
+          clickedThisIter: clicked,
+          clickedTotal: buttonsClickedTotal,
+          atBottomNow,
+          bottomStable,
+          noGrowthStable,
+          grew,
+        });
       }
 
       setBusy(true, `Loading entries\u2026 (${count} so far)`);
 
-      // Exit when:
-      //   - scroll position + page height haven't changed for a while
-      //   - entity count hasn't changed for a while
-      //   - we've reached the bottom at least once
-      // All three required: page-height and count plateauing
-      // independently, but the visible scroll has truly hit max.
-      if (firstBottomIter !== null
-          && stuckScrollCount >= stuckThreshold
-          && stuckCountCount >= stuckThreshold) {
-        console.log(`[LinkedIn Printable Format] exit: atBottom + scroll stuck for ${stuckScrollCount} + count stuck for ${stuckCountCount} (entries=${count})`);
-        break;
+      // Exit condition (per GPT-5 council recommendation):
+      //   bottom stable for N iters
+      //   AND no growth for N iters
+      //   AND no remaining load-more buttons visible
+      // The third gate prevents premature exit when an unclicked
+      // "Show all 25" button is still onscreen waiting to expand.
+      if (bottomStable >= bottomStableNeeded && noGrowthStable >= growthStableNeeded) {
+        const remainingBtns = findLoadMoreButtons(scopeEl).filter(lpfIsVisible);
+        if (remainingBtns.length === 0) {
+          exitReason = 'stable-bottom-no-buttons';
+          lpfLog('exit: stable bottom, no growth, no remaining load-more buttons', {
+            iter,
+            count,
+            ms: Math.round(performance.now() - startT),
+          });
+          break;
+        } else {
+          // Reset and try again - clicking the remaining button(s)
+          // will likely produce more growth on the next iteration.
+          lpfLog('stable-bottom but load-more buttons remain - resetting counters', {
+            remaining: remainingBtns.slice(0, 5).map(lpfElPath),
+            count: remainingBtns.length,
+          });
+          bottomStable = 0;
+          noGrowthStable = 0;
+        }
       }
     }
 
-    console.log('[LinkedIn Printable Format] autoScrollToLoadAll: done after',
-      iterations, 'iterations; final scrollY=' + window.scrollY +
-      '/' + maxDocScrollY(),
-      'final scrollHeight=' + document.documentElement.scrollHeight,
-      'final entry count=' + document.querySelectorAll('[componentkey^="entity-collection-item"]').length);
+    if ((performance.now() - startT) >= maxMs) {
+      lpfWarn('autoScrollToLoadAll: hit maxMs cap', { maxMs, iter });
+    }
 
-    window.scrollTo({ top: originalY, behavior: 'instant' });
-    await new Promise(r => setTimeout(r, 150));
+    const finalCount = getEntityItems(scopeEl).length;
+    lpfLog('autoScrollToLoadAll: done', {
+      exitReason,
+      ms: Math.round(performance.now() - startT),
+      iter,
+      finalCount,
+      finalScroller: lpfElPath(scroller),
+      finalMetrics: getScrollMetrics(scroller),
+      finalWindow: getScrollMetrics(window),
+      buttonsClickedTotal,
+    });
+
+    // Restore both the inner scroller and window position - the
+    // chosen scroller may not be window.
+    try {
+      if (scroller !== window) {
+        scroller.scrollTop = originalScrollerTop;
+      }
+      window.scrollTo({ top: originalWindowY, behavior: 'instant' });
+    } catch (e) {
+      lpfWarn('scroll-restore failed', e);
+    }
+    await lpfSleep(150);
   }
 
   function findContentContainer() {
@@ -416,7 +850,7 @@
 
     try {
       await autoScrollToLoadAll();
-      expandSeeMoreButtons();
+      await expandSeeMoreButtons();
 
       const content = findContentContainer();
       if (content) {
@@ -764,7 +1198,7 @@
     setBusy(true, 'Loading all entries\u2026');
     try {
       await autoScrollToLoadAll();
-      expandSeeMoreButtons();
+      await expandSeeMoreButtons();
       await new Promise(r => setTimeout(r, 250));
 
       const items = document.querySelectorAll('[componentkey^="entity-collection-item"]');
