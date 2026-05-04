@@ -1,13 +1,11 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.8.0
+// @version      1.8.1
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
 // @match        https://www.linkedin.com/in/*/details/*
 // @match        https://www.linkedin.com/in/*/details/*/*
-// @match        https://*.linkedin.com/in/*/details/*
-// @include      /^https:\/\/(www\.)?linkedin\.com\/in\/[^/]+\/details\/.+/
 // @icon         https://www.linkedin.com/favicon.ico
 // @run-at       document-idle
 // @grant        none
