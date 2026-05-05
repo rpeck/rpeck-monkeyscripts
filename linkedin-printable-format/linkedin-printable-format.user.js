@@ -1,11 +1,10 @@
 // ==UserScript==
 // @name         LinkedIn Printable Format
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.8.1
+// @version      1.8.2
 // @description  Toggle clean, print-friendly views for LinkedIn profile detail pages and export Markdown
 // @author       Raymond Peck
-// @match        https://www.linkedin.com/in/*/details/*
-// @match        https://www.linkedin.com/in/*/details/*/*
+// @match        https://www.linkedin.com/*
 // @icon         https://www.linkedin.com/favicon.ico
 // @run-at       document-idle
 // @grant        none
@@ -1309,7 +1308,25 @@
     }
   }
 
+  /**
+   * The script is registered to match all of www.linkedin.com so it
+   * can survive SPA navigation, but the toolbar should only appear
+   * on profile detail pages (/in/<slug>/details/<section>/...).
+   */
+  function isDetailPage() {
+    return /^\/in\/[^/]+\/details\/.+/.test(location.pathname);
+  }
+
+  function removeToolbar() {
+    const existing = document.getElementById(TOOLBAR_ID);
+    if (existing) existing.remove();
+  }
+
   function addButtons() {
+    if (!isDetailPage()) {
+      removeToolbar();
+      return;
+    }
     if (document.getElementById(TOOLBAR_ID)) return;
 
     const toolbar = document.createElement('div');
@@ -1378,21 +1395,40 @@
     init();
   }
 
-  // LinkedIn is a single-page app, so retry after navigation/rendering changes.
+  // LinkedIn is a single-page app: the script is loaded once for
+  // www.linkedin.com/* and we use a MutationObserver on the document
+  // to detect URL changes (per Violentmonkey's recommendation for
+  // SPA fake-navigation sites).  When we land on a detail page,
+  // inject the toolbar; when we leave, remove it.
   let lastUrl = location.href;
+
+  function onUrlChange() {
+    disablePrintableMode();
+    removeToolbar();
+    if (isDetailPage()) {
+      window.setTimeout(addButtons, 800);
+    }
+  }
 
   const observer = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      disablePrintableMode();
-      const existing = document.getElementById(TOOLBAR_ID);
-      if (existing) existing.remove();
-      window.setTimeout(addButtons, 1000);
+      onUrlChange();
     }
   });
 
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
+  });
+
+  // Fallback: also listen for popstate (browser nav) and pushState/
+  // replaceState wrappers, in case the MutationObserver misses an
+  // URL-only change with no DOM mutation.
+  window.addEventListener('popstate', () => {
+    if (location.href !== lastUrl) {
+      lastUrl = location.href;
+      onUrlChange();
+    }
   });
 })();
