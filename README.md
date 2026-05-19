@@ -21,3 +21,14 @@ Uses a fallback chain for topic extraction:
 1. JSON-LD headline (LinkedIn's own summary)
 2. Post body text (first ~80 chars)
 3. Hashtags from post
+
+### Claude Usage Sustainable Rate
+
+On `https://claude.ai/settings/usage`, adds a small panel inside the 5-hour usage
+card showing the current burn rate as a percentage of the sustainable rate.
+
+Sustainable = `100% ÷ 5h = 20%/hr`.  If you're at 20% used with 1h elapsed,
+that's 100% of sustainable.  At 10% used with 1h elapsed, you're at 50%.
+Color-coded green (<90%), yellow (90–110%), red (>110%); recomputed every 30s.
+
+**[Install](https://github.com/rpeck/rpeck-monkeyscripts/raw/main/claude-usage-rate/claude-usage-rate.user.js)**
