@@ -1,5 +1,48 @@
 # CLAUDE.md — Monkeyscript Repo Instructions
 
+## Ground selectors in the actual DOM (REQUIRED, do this FIRST)
+
+Before writing any selector or extraction code for a new script, you MUST
+have a real sample of the target DOM in front of you.  Selectors written
+from assumptions about UI copy, page layout, or "how this kind of page
+usually looks" fail constantly and waste an iteration.
+
+This bit us on `claude-usage-rate`: the first version assumed the row
+would be labeled "5-hour window" (from product/marketing language).  The
+actual on-page text was "Current session", and the reset format was
+"Resets in 3 hr 42 min" / "Resets Mon 1:00 PM" — not the "3h 42m"
+shorthand we'd assumed.  Every selector in v1.0.0 missed.  Pay the
+round-trip cost up front instead.
+
+### If you can't see the page directly, ASK
+
+For any site you can't directly inspect (auth-walled like `claude.ai`,
+private repos, internal tools, sites behind login), ASK the user for
+one of these before writing code, in order of preference:
+
+1. **A real DOM excerpt** from DevTools (Inspect the element → Edit as
+   HTML → copy).  Shows exact tag names, attributes, parent structure.
+2. **A screenshot** of the page.  Reveals exact on-page labels and
+   approximate structure.  Often enough.
+3. **Raw HTML** via `curl` / `WebFetch` (only for un-authenticated pages).
+
+Sample ask:
+
+> "I can't see the DOM at <url> directly.  Can you paste the relevant
+> HTML from DevTools (Inspect → Edit as HTML → copy), or send a
+> screenshot?  I'll write the selectors against that."
+
+### Do NOT extrapolate selectors from
+
+- **Product feature names** — "5-hour usage window" was rendered as
+  "Current session" in the actual DOM.
+- **Phrasing of the user's request** — the user describing the feature
+  one way doesn't mean the page text matches that phrasing.
+- **How a similar page used to look** — selectors rot; don't trust
+  memory.
+- **What "makes sense" structurally** — frameworks insert wrappers,
+  flex/grid layouts collapse expectations.
+
 ## Defensive selector handling (REQUIRED)
 
 Every userscript in this repo runs against third-party sites whose DOM,
@@ -49,6 +92,18 @@ add or modify here, no exceptions.
 8. **Add `@updateURL` and `@downloadURL`** to every new script,
    pointing at the raw GitHub URL on `main`.  Without these, the
    script can't auto-update.
+
+9. **Prefer text-anchor walk-up over heading or class matching.**
+   When matching a row/card with no `data-testid`/`aria` hooks,
+   anchor on a stable functional text token that appears in every
+   target instance ("Resets", "Reply", "min ago", a unit like "%"
+   or "$"), use a TreeWalker over `SHOW_TEXT` to find each text
+   node, then walk *up* the DOM to find the smallest ancestor that
+   also contains the other tokens you need.  This is more durable
+   than "find the heading and walk up" because product copy changes
+   more often than functional text — "5-hour window" became
+   "Current session", but "Resets" stayed put.  Reference:
+   `claude-usage-rate/claude-usage-rate.user.js` (`findUsageRows`).
 
 ### Reference implementations
 
