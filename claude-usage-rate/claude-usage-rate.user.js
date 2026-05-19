@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Usage Sustainable Rate
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.0.0
+// @version      1.1.0
 // @description  On claude.ai/settings/usage, show current burn rate as % of the sustainable rate for the 5-hour window.
 // @author       rpeck
 // @match        https://claude.ai/settings/usage*
@@ -40,85 +40,74 @@
 
   // ---------- DOM helpers ----------
 
-  function ancestorCard(el) {
-    // Walk up until we hit something that looks like a card (has padding,
-    // border, or is a section/article).  Bounded to avoid running off the
-    // body.
-    let cur = el;
-    for (let i = 0; i < 10 && cur && cur !== document.body; i++) {
-      const tag = (cur.tagName || '').toLowerCase();
-      if (tag === 'section' || tag === 'article') return cur;
-      const cls = (cur.className && cur.className.toString) ? cur.className.toString() : '';
-      if (/card|panel|tile|surface|box/i.test(cls)) return cur;
-      cur = cur.parentElement;
-    }
-    return el;
-  }
-
   function textOf(el) {
     return (el && (el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim();
   }
 
-  // ---------- Card discovery ----------
+  // ---------- Row discovery ----------
+  //
+  // claude.ai/settings/usage lays each usage limit out as a single row
+  // containing a label (e.g. "Current session", "All models"), a sub-label
+  // (e.g. "Resets in 3 hr 42 min", "Resets Mon 1:00 PM"), a progress bar,
+  // and a "NN% used" cell.  We anchor on the "Resets" text node and walk
+  // up to the smallest ancestor that also contains a "%" elsewhere in the
+  // row — that ancestor is the row container.
 
-  function findHourlyCard() {
-    // Strategy A: data-testid containing hourly/5-hour/usage.
-    const testIdSelectors = [
-      '[data-testid*="5-hour"]',
-      '[data-testid*="five-hour"]',
-      '[data-testid*="hourly"]',
-      '[data-testid*="usage-window-5"]',
-    ];
-    for (const sel of testIdSelectors) {
-      const el = document.querySelector(sel);
-      if (el) return ancestorCard(el);
-    }
-
-    // Strategy B: any heading matching /5\s*[- ]?\s*hour/i.
-    const headings = document.querySelectorAll('h1, h2, h3, h4, h5, div[role="heading"], [aria-level]');
-    for (const h of headings) {
-      const t = textOf(h);
-      if (/5\s*[- ]?\s*hour/i.test(t) || /\bhourly\b/i.test(t)) {
-        return ancestorCard(h);
+  function findUsageRows() {
+    const out = [];
+    if (!document.body) return out;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+    let n;
+    while ((n = walker.nextNode())) {
+      const v = n.nodeValue || '';
+      if (!/Resets?\b/i.test(v)) continue;
+      let cur = n.parentElement;
+      for (let i = 0; i < 12 && cur && cur !== document.body; i++) {
+        const t = textOf(cur);
+        if (/Resets?/i.test(t) && /\d+\s*%/.test(t)) {
+          out.push(cur);
+          break;
+        }
+        cur = cur.parentElement;
       }
     }
-
-    // Strategy C: any element whose direct text contains "5-hour usage" or "Current 5-hour".
-    const all = document.querySelectorAll('div, section, article, p, span');
-    for (const el of all) {
-      const t = textOf(el);
-      if (t.length > 400) continue; // skip huge containers
-      if (/5[- ]?hour usage/i.test(t) || /current 5[- ]?hour/i.test(t)) {
-        return ancestorCard(el);
-      }
-    }
-
-    return null;
+    // Dedup, then keep only the smallest matching ancestor (drop any row
+    // that contains another row already in the list).
+    const uniq = Array.from(new Set(out));
+    return uniq.filter((r) => !uniq.some((o) => o !== r && r.contains(o)));
   }
 
-  function findWeeklyCard() {
-    const testIdSelectors = [
-      '[data-testid*="weekly"]',
-      '[data-testid*="week"]',
-      '[data-testid*="7-day"]',
-    ];
-    for (const sel of testIdSelectors) {
-      const el = document.querySelector(sel);
-      if (el) {
-        const card = ancestorCard(el);
-        // Avoid colliding with the hourly card.
-        if (card && !card.querySelector('[data-testid*="hourly"], [data-testid*="5-hour"]')) {
-          return card;
-        }
-      }
-    }
+  function classifyRow(row) {
+    const t = textOf(row).toLowerCase();
+    if (/current session|5[\s-]?hour|\bhourly\b|\b5\s*h\b/.test(t)) return 'hourly';
+    if (/weekly|\bweek\b|\ball models\b|\bsonnet only\b|\bopus only\b/.test(t)) return 'weekly';
+    // Heuristic fallback: short reset interval implies hourly.
+    const reset = parseResetMs(row);
+    if (reset == null) return null;
+    const hoursOut = (reset - Date.now()) / 3600 / 1000;
+    if (hoursOut <= 6) return 'hourly';
+    return 'weekly';
+  }
 
-    const headings = document.querySelectorAll('h1, h2, h3, h4, h5, div[role="heading"], [aria-level]');
-    for (const h of headings) {
-      const t = textOf(h);
-      if (/\b(weekly|week)\b/i.test(t) && !/5\s*[- ]?\s*hour/i.test(t)) {
-        return ancestorCard(h);
-      }
+  function rowLabel(row) {
+    // First short text line is usually the row's heading (e.g. "Current
+    // session", "All models").  Pull a heading-like descendant if present,
+    // else the first text node that isn't the "Resets ..." line.
+    const heading = row.querySelector('h1, h2, h3, h4, h5, h6, [role="heading"]');
+    if (heading) {
+      const t = textOf(heading);
+      if (t) return t;
+    }
+    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT, null, false);
+    let n;
+    while ((n = walker.nextNode())) {
+      const t = (n.nodeValue || '').trim();
+      if (!t) continue;
+      if (/^Resets?\b/i.test(t)) continue;
+      if (/^\d+\s*%/.test(t)) continue;
+      if (/^used$/i.test(t)) continue;
+      if (t.length > 60) continue;
+      return t;
     }
     return null;
   }
@@ -144,7 +133,7 @@
   }
 
   function parseResetMs(card) {
-    // Strategy A: <time datetime="..."> — most stable.
+    // Strategy A: <time datetime="..."> — most stable when present.
     const time = card.querySelector('time[datetime]');
     if (time) {
       const dt = new Date(time.getAttribute('datetime'));
@@ -153,36 +142,42 @@
 
     const t = textOf(card);
 
-    // Strategy B: "Resets in Xh Ym" / "Resets in 4h" / "Resets in 30m".
-    let m = t.match(/Resets?\s+in\s+(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?(?:\s*(\d+)\s*s)?/i);
-    if (m && (m[1] || m[2] || m[3])) {
-      const h = parseInt(m[1] || '0', 10);
-      const mm = parseInt(m[2] || '0', 10);
-      const s = parseInt(m[3] || '0', 10);
+    // Strategy B: any "Resets in ..." duration.  claude.ai uses
+    // "Resets in 3 hr 42 min"; allow common variants.
+    let m = t.match(/Resets?\s+in\s+([^\n.;]+?)(?:\.|;|\s{2}|$)/i);
+    if (m) {
+      const part = m[1];
+      const hrM = part.match(/(\d+)\s*(?:hours?|hrs?|h\b)/i);
+      const minM = part.match(/(\d+)\s*(?:minutes?|mins?|m\b)/i);
+      const secM = part.match(/(\d+)\s*(?:seconds?|secs?|s\b)/i);
+      const h = hrM ? parseInt(hrM[1], 10) : 0;
+      const mm = minM ? parseInt(minM[1], 10) : 0;
+      const s = secM ? parseInt(secM[1], 10) : 0;
       if (h > 0 || mm > 0 || s > 0) {
         return Date.now() + ((h * 3600 + mm * 60 + s) * 1000);
       }
     }
 
-    // Strategy C: "Resets at 6:30 PM" or "Resets at 18:30" (today/tomorrow).
-    m = t.match(/Resets?\s+(?:at|on)\s+([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM|am|pm)?)/);
+    // Strategy C: "Resets <Weekday> [at] H:MM AM/PM" — e.g.
+    // "Resets Mon 1:00 PM" (no "at").
+    m = t.match(/Resets?\s+(?:on\s+)?([A-Za-z]+)\s+(?:at\s+)?(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)/);
+    if (m) {
+      const wd = parseWeekdayTime(m[1], m[2]);
+      if (wd) return wd;
+    }
+
+    // Strategy D: "Resets at H:MM AM/PM" or "Resets at 18:30".
+    m = t.match(/Resets?\s+(?:at|on)\s+(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)/);
     if (m) {
       const parsed = parseClockTime(m[1]);
       if (parsed) return parsed;
     }
 
-    // Strategy D: any explicit ISO-ish date in the card text.
+    // Strategy E: ISO-ish date string anywhere in the row.
     m = t.match(/(\d{4}-\d{2}-\d{2}T[\d:.+\-Z]+)/);
     if (m) {
       const dt = new Date(m[1]);
       if (!isNaN(dt.getTime())) return dt.getTime();
-    }
-
-    // Strategy E: "Resets <weekday> at HH:MM"
-    m = t.match(/Resets?\s+(\w+)\s+at\s+([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM|am|pm)?)/);
-    if (m) {
-      const wd = parseWeekdayTime(m[1], m[2]);
-      if (wd) return wd;
     }
 
     return null;
@@ -203,16 +198,32 @@
   }
 
   function parseWeekdayTime(weekday, clock) {
-    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    const idx = days.indexOf(weekday.toLowerCase());
-    if (idx < 0) return null;
-    const base = parseClockTime(clock);
-    if (!base) return null;
-    const d = new Date(base);
-    while (d.getDay() !== idx || d.getTime() <= Date.now()) {
+    const days = {
+      sun: 0, sunday: 0,
+      mon: 1, monday: 1,
+      tue: 2, tues: 2, tuesday: 2,
+      wed: 3, weds: 3, wednesday: 3,
+      thu: 4, thur: 4, thurs: 4, thursday: 4,
+      fri: 5, friday: 5,
+      sat: 6, saturday: 6,
+    };
+    const idx = days[weekday.toLowerCase()];
+    if (idx == null) return null;
+    const clockM = clock.match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?$/);
+    if (!clockM) return null;
+    let hr = parseInt(clockM[1], 10);
+    const min = parseInt(clockM[2], 10);
+    const ampm = (clockM[3] || '').toLowerCase();
+    if (ampm === 'pm' && hr < 12) hr += 12;
+    if (ampm === 'am' && hr === 12) hr = 0;
+    const d = new Date();
+    d.setHours(hr, min, 0, 0);
+    let guard = 0;
+    while ((d.getDay() !== idx || d.getTime() <= Date.now()) && guard < 14) {
       d.setDate(d.getDate() + 1);
-      if (d.getTime() - Date.now() > 14 * 24 * 3600 * 1000) return null; // safety
+      guard++;
     }
+    if (guard >= 14) return null;
     return d.getTime();
   }
 
@@ -251,26 +262,32 @@
     return { dot: '#dc2626', label: '#991b1b' };
   }
 
-  function ensurePanel(card, suffix) {
+  function ensurePanel(row, suffix) {
     const id = `${PANEL_ID_PREFIX}-${suffix}`;
     let panel = document.getElementById(id);
-    if (panel && panel.parentElement === card) return panel;
+    if (panel && panel.previousElementSibling === row) return panel;
     if (panel) panel.remove();
 
     panel = document.createElement('div');
     panel.id = id;
     panel.setAttribute('data-rpeck-burn-rate', suffix);
     panel.style.cssText = [
-      'margin: 8px 0 12px',
+      'margin: 6px 0 16px',
       'padding: 10px 12px',
       'border: 1px solid rgba(0,0,0,0.12)',
       'border-radius: 8px',
-      'background: rgba(0,0,0,0.03)',
+      'background: rgba(0,0,0,0.04)',
       'font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif',
       'color: inherit',
     ].join(';');
 
-    card.insertBefore(panel, card.firstChild);
+    const parent = row.parentElement;
+    if (!parent) return null;
+    if (row.nextSibling) {
+      parent.insertBefore(panel, row.nextSibling);
+    } else {
+      parent.appendChild(panel);
+    }
     return panel;
   }
 
@@ -403,49 +420,55 @@
       return false;
     }
 
-    const card = findHourlyCard();
-    if (!card) return false;
+    const rows = findUsageRows();
+    if (rows.length === 0) return false;
 
-    const usedPct = parseUsedPct(card);
-    const resetMs = parseResetMs(card);
+    let hourlyOk = false;
+    const seenIds = new Set();
+    let hourlyCount = 0;
+    let weeklyCount = 0;
 
-    if (usedPct == null || resetMs == null) {
-      const missing = [];
-      if (usedPct == null) missing.push('usage %');
-      if (resetMs == null) missing.push('reset time');
-      console.warn(LOG_PREFIX, 'partial extraction', { usedPct, resetMs, missing });
-      return false;
-    }
+    for (const row of rows) {
+      const kind = classifyRow(row);
+      if (!kind) continue;
+      const usedPct = parseUsedPct(row);
+      const resetMs = parseResetMs(row);
+      if (usedPct == null || resetMs == null) {
+        console.warn(LOG_PREFIX, 'partial row extraction', {
+          label: rowLabel(row), usedPct, resetMs, kind,
+        });
+        continue;
+      }
+      const msUntilReset = Math.max(0, resetMs - Date.now());
+      const windowMs = kind === 'hourly' ? FIVE_HOUR_MS : WEEK_MS;
+      const calc = computeRate(usedPct, msUntilReset, windowMs);
+      calc.usedPctText = `${usedPct}%`;
+      if (calc.currentRate == null) calc.currentRate = 0;
 
-    const msUntilReset = Math.max(0, resetMs - Date.now());
-    const calc = computeRate(usedPct, msUntilReset, FIVE_HOUR_MS);
-    calc.usedPctText = `${usedPct}%`;
-    calc.currentRate = (calc.currentRate || 0);
+      let suffix;
+      if (kind === 'hourly') {
+        suffix = `hourly-${hourlyCount++}`;
+      } else {
+        suffix = `weekly-${weeklyCount++}`;
+      }
+      seenIds.add(`${PANEL_ID_PREFIX}-${suffix}`);
 
-    const panel = ensurePanel(card, 'hourly');
-    renderPanel(panel, '5-hour window', calc);
-
-    // Weekly (best effort).
-    const wcard = findWeeklyCard();
-    if (wcard && wcard !== card) {
-      const wUsed = parseUsedPct(wcard);
-      const wReset = parseResetMs(wcard);
-      if (wUsed != null && wReset != null) {
-        const wMs = Math.max(0, wReset - Date.now());
-        const wCalc = computeRate(wUsed, wMs, WEEK_MS);
-        wCalc.usedPctText = `${wUsed}%`;
-        wCalc.currentRate = (wCalc.currentRate || 0);
-        const wPanel = ensurePanel(wcard, 'weekly');
-        renderPanel(wPanel, 'Weekly window', wCalc);
+      const label = rowLabel(row) || (kind === 'hourly' ? '5-hour window' : 'Weekly window');
+      const windowText = kind === 'hourly' ? '5-hour' : 'weekly';
+      const panel = ensurePanel(row, suffix);
+      if (panel) {
+        renderPanel(panel, `${label} \u00b7 ${windowText}`, calc);
+        if (kind === 'hourly') hourlyOk = true;
       }
     }
 
-    dismissError();
-    console.log(LOG_PREFIX, 'rate', {
-      usedPct,
-      resetInMin: Math.round(msUntilReset / 60000),
-      pctOfSustainable: calc.kind === 'ok' ? Math.round(calc.pctOfSustainable) : calc.kind,
+    // Remove any stale panels we didn't refresh this tick.
+    document.querySelectorAll(`[id^="${PANEL_ID_PREFIX}-"]`).forEach((el) => {
+      if (!seenIds.has(el.id)) el.remove();
     });
+
+    if (!hourlyOk) return false;
+    dismissError();
     return true;
   }
 
@@ -468,10 +491,14 @@
       }
       if (attempts >= MOUNT_RETRY_MAX) {
         stopMountRetry();
-        if (isUsagePage() && !findHourlyCard()) {
-          showSelectorError(['the 5-hour usage card']);
-        } else if (isUsagePage()) {
-          showSelectorError(['the usage percentage or reset time inside the 5-hour card']);
+        if (!isUsagePage()) return;
+        const rows = findUsageRows();
+        if (rows.length === 0) {
+          showSelectorError(['any usage row (label + "Resets" + "%") on the page']);
+        } else if (!rows.some((r) => classifyRow(r) === 'hourly')) {
+          showSelectorError(['the 5-hour / Current session usage row']);
+        } else {
+          showSelectorError(['the usage percentage or reset time inside the 5-hour row']);
         }
       }
     }, MOUNT_RETRY_MS);
