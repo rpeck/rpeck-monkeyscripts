@@ -1,36 +1,42 @@
 # CLAUDE.md — Monkeyscript Repo Instructions
 
-## Ground selectors in the actual DOM (REQUIRED, do this FIRST)
+## NEVER write a userscript without studying the live DOM first (ABSOLUTE)
 
-Before writing any selector or extraction code for a new script, you MUST
-have a real sample of the target DOM in front of you.  Selectors written
-from assumptions about UI copy, page layout, or "how this kind of page
-usually looks" fail constantly and waste an iteration.
+**You must never create or substantively modify a userscript in this repo
+without first fetching the target page and studying its actual DOM.**
+No exceptions.  No "I'll write defensive fallbacks and iterate."  No
+extrapolating from product/marketing language, the user's phrasing, or
+memory of how a similar page used to look.  Get the DOM first, then code.
 
-This bit us on `claude-usage-rate`: the first version assumed the row
-would be labeled "5-hour window" (from product/marketing language).  The
-actual on-page text was "Current session", and the reset format was
-"Resets in 3 hr 42 min" / "Resets Mon 1:00 PM" — not the "3h 42m"
-shorthand we'd assumed.  Every selector in v1.0.0 missed.  Pay the
-round-trip cost up front instead.
+This burned us on `claude-usage-rate` v1.0.0: every selector was based
+on the assumption that the row would be labeled "5-hour window" with
+text like "Resets in 3h 42m".  The actual on-page text was "Current
+session" / "Resets in 3 hr 42 min" / "Resets Mon 1:00 PM".  All three
+of the multi-strategy fallback branches missed because all three were
+grounded in the same wrong assumption.  Defensive fallbacks only help
+if at least ONE branch makes contact with reality.
 
-### If you can't see the page directly, ASK
+### Mandatory: obtain the DOM before writing selectors
 
-For any site you can't directly inspect (auth-walled like `claude.ai`,
-private repos, internal tools, sites behind login), ASK the user for
-one of these before writing code, in order of preference:
+In order of preference:
 
-1. **A real DOM excerpt** from DevTools (Inspect the element → Edit as
-   HTML → copy).  Shows exact tag names, attributes, parent structure.
-2. **A screenshot** of the page.  Reveals exact on-page labels and
-   approximate structure.  Often enough.
-3. **Raw HTML** via `curl` / `WebFetch` (only for un-authenticated pages).
+1. **Un-authenticated pages**: fetch the HTML yourself via `WebFetch` /
+   `curl` and read the markup before writing any selector.
+2. **Auth-walled / private pages**: ASK the user for one of:
+   - A DOM excerpt from DevTools (Inspect → Edit as HTML → copy).  Best.
+   - A screenshot of the page.  Acceptable when DOM not available.
+   - A copy/paste of the relevant on-page text labels.
 
-Sample ask:
+Sample ask for an auth-walled site:
 
-> "I can't see the DOM at <url> directly.  Can you paste the relevant
-> HTML from DevTools (Inspect → Edit as HTML → copy), or send a
-> screenshot?  I'll write the selectors against that."
+> "I can't fetch the DOM at <url> directly (auth-walled).  Before I
+> write any selectors, can you paste the relevant HTML from DevTools
+> (Inspect the element → Edit as HTML → copy), or send a screenshot
+> of the section we're targeting?"
+
+If the user pushes back ("just write it"), explain that selectors
+written from assumptions fail and remind them of the
+`claude-usage-rate` v1.0.0 → v1.1.0 churn.  Wait for the DOM.
 
 ### Do NOT extrapolate selectors from
 
