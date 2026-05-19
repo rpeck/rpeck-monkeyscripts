@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Usage Sustainable Rate
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.2.0
+// @version      1.2.1
 // @description  On claude.ai/settings/usage, show current burn rate as % of the sustainable rate for the 5-hour window.
 // @author       rpeck
 // @match        https://claude.ai/settings/usage*
@@ -410,11 +410,11 @@
         const when = formatLocalWhen(runOutDate);
         const dur = formatDuration(hoursToFull);
         if (beforeReset) {
-          runOutLine.textContent = `Runs out at this rate: ${when} (in ${dur})`;
+          runOutLine.textContent = `At the current usage rate, runs out: ${when} (in ${dur})`;
           runOutLine.style.color = '#991b1b';
           runOutLine.style.fontWeight = '600';
         } else {
-          runOutLine.textContent = `At this rate, would hit 100% on ${when} (in ${dur}) \u2014 but window resets first`;
+          runOutLine.textContent = `At the current usage rate, would hit 100% on ${when} (in ${dur}) \u2014 but window resets first`;
         }
         panel.appendChild(runOutLine);
       }
