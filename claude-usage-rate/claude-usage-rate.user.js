@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Usage Sustainable Rate
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.1.0
+// @version      1.2.0
 // @description  On claude.ai/settings/usage, show current burn rate as % of the sustainable rate for the 5-hour window.
 // @author       rpeck
 // @match        https://claude.ai/settings/usage*
@@ -262,6 +262,46 @@
     return { dot: '#dc2626', label: '#991b1b' };
   }
 
+  function formatLocalWhen(date) {
+    const now = new Date();
+    const target = new Date(date);
+    const diffMs = target.getTime() - now.getTime();
+    if (!Number.isFinite(diffMs)) return '—';
+    if (diffMs <= 0) return 'now';
+
+    const timeStr = target.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const sameDay = target.toDateString() === now.toDateString();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(now.getDate() + 1);
+    const isTomorrow = target.toDateString() === tomorrow.toDateString();
+
+    if (sameDay) return `today ${timeStr}`;
+    if (isTomorrow) return `tomorrow ${timeStr}`;
+    const oneWeekMs = 7 * 24 * 3600 * 1000;
+    if (diffMs < oneWeekMs) {
+      const dow = target.toLocaleDateString([], { weekday: 'short' });
+      return `${dow} ${timeStr}`;
+    }
+    const md = target.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return `${md} ${timeStr}`;
+  }
+
+  function formatDuration(hours) {
+    if (!Number.isFinite(hours) || hours < 0) return '—';
+    if (hours < 1) {
+      const m = Math.round(hours * 60);
+      return `${m}m`;
+    }
+    if (hours < 24) {
+      const h = Math.floor(hours);
+      const m = Math.round((hours - h) * 60);
+      return m > 0 ? `${h}h ${m}m` : `${h}h`;
+    }
+    const d = Math.floor(hours / 24);
+    const h = Math.round(hours - d * 24);
+    return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  }
+
   function ensurePanel(row, suffix) {
     const id = `${PANEL_ID_PREFIX}-${suffix}`;
     let panel = document.getElementById(id);
@@ -291,7 +331,7 @@
     return panel;
   }
 
-  function renderPanel(panel, label, calc) {
+  function renderPanel(panel, label, calc, kind) {
     panel.innerHTML = '';
 
     const row = document.createElement('div');
@@ -336,11 +376,49 @@
     dot.style.background = c.dot;
     title.style.color = c.label;
     title.textContent = `Burn rate: ${pct.toFixed(0)}% of sustainable`;
-    sub.textContent =
-      `${calc.usedPctText} used in ${calc.elapsedHours.toFixed(2)}h ` +
-      `→ ${calc.currentRate.toFixed(2)}%/hr ` +
-      `(target ${calc.sustainablePctPerHr.toFixed(2)}%/hr, ` +
-      `${calc.remainingHours.toFixed(2)}h until reset)`;
+
+    const usedNum = calc.usedPct;
+    if (kind === 'weekly') {
+      const ratePerDay = calc.currentRate * 24;
+      const targetPerDay = calc.sustainablePctPerHr * 24;
+      const elapsedDays = calc.elapsedHours / 24;
+      const remainingDays = calc.remainingHours / 24;
+      sub.textContent =
+        `${calc.usedPctText} used in ${elapsedDays.toFixed(2)}d ` +
+        `\u2192 ${ratePerDay.toFixed(2)}%/day ` +
+        `(target ${targetPerDay.toFixed(2)}%/day, ` +
+        `${remainingDays.toFixed(2)}d until reset)`;
+    } else {
+      sub.textContent =
+        `${calc.usedPctText} used in ${calc.elapsedHours.toFixed(2)}h ` +
+        `\u2192 ${calc.currentRate.toFixed(2)}%/hr ` +
+        `(target ${calc.sustainablePctPerHr.toFixed(2)}%/hr, ` +
+        `${calc.remainingHours.toFixed(2)}h until reset)`;
+    }
+
+    // Projected run-out: assumes current burn rate holds.  For the
+    // weekly window this is effectively the average daily rate (already
+    // amortized over sleep/idle time since the rate is derived from
+    // wall-clock elapsed hours).
+    if (calc.currentRate > 0 && Number.isFinite(usedNum)) {
+      const hoursToFull = (100 - usedNum) / calc.currentRate;
+      if (hoursToFull > 0 && Number.isFinite(hoursToFull)) {
+        const runOutDate = new Date(Date.now() + hoursToFull * 3600 * 1000);
+        const runOutLine = document.createElement('div');
+        runOutLine.style.cssText = 'margin-top:2px;font-size:12px;opacity:0.85;';
+        const beforeReset = hoursToFull <= calc.remainingHours;
+        const when = formatLocalWhen(runOutDate);
+        const dur = formatDuration(hoursToFull);
+        if (beforeReset) {
+          runOutLine.textContent = `Runs out at this rate: ${when} (in ${dur})`;
+          runOutLine.style.color = '#991b1b';
+          runOutLine.style.fontWeight = '600';
+        } else {
+          runOutLine.textContent = `At this rate, would hit 100% on ${when} (in ${dur}) \u2014 but window resets first`;
+        }
+        panel.appendChild(runOutLine);
+      }
+    }
   }
 
   // ---------- showSelectorError (canonical pattern) ----------
@@ -442,6 +520,7 @@
       const msUntilReset = Math.max(0, resetMs - Date.now());
       const windowMs = kind === 'hourly' ? FIVE_HOUR_MS : WEEK_MS;
       const calc = computeRate(usedPct, msUntilReset, windowMs);
+      calc.usedPct = usedPct;
       calc.usedPctText = `${usedPct}%`;
       if (calc.currentRate == null) calc.currentRate = 0;
 
@@ -457,7 +536,7 @@
       const windowText = kind === 'hourly' ? '5-hour' : 'weekly';
       const panel = ensurePanel(row, suffix);
       if (panel) {
-        renderPanel(panel, `${label} \u00b7 ${windowText}`, calc);
+        renderPanel(panel, `${label} \u00b7 ${windowText}`, calc, kind);
         if (kind === 'hourly') hourlyOk = true;
       }
     }
