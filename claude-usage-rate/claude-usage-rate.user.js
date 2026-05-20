@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Usage Sustainable Rate
 // @namespace    https://github.com/rpeck/rpeck-monkeyscripts
-// @version      1.2.1
+// @version      1.3.0
 // @description  On claude.ai/settings/usage, show current burn rate as % of the sustainable rate for the 5-hour window.
 // @author       rpeck
 // @match        https://claude.ai/settings/usage*
@@ -34,8 +34,13 @@
   // ---------- URL gating ----------
 
   function isUsagePage() {
-    return /\/settings\/usage(?:\/|$|\?|#)/.test(location.pathname + location.search + location.hash)
-        || /\/settings\/usage/.test(location.href);
+    const all = location.pathname + location.search + location.hash;
+    // Legacy path-based route: /settings/usage
+    if (/\/settings\/usage(?:\/|$|\?|#)/.test(all)) return true;
+    // New hash-based route (claude.ai/new#settings/usage and variants
+    // like /new#/settings/usage).
+    if (/#\/?settings\/usage/.test(all)) return true;
+    return false;
   }
 
   // ---------- DOM helpers ----------
@@ -63,9 +68,19 @@
       if (!/Resets?\b/i.test(v)) continue;
       let cur = n.parentElement;
       for (let i = 0; i < 12 && cur && cur !== document.body; i++) {
+        // Don't accept dialog/navigation wrappers as a row — they're
+        // multi-row containers that would lump everything together.
+        const role = cur.getAttribute && cur.getAttribute('role');
+        if (role === 'dialog' || role === 'navigation' || role === 'menu') break;
+
         const t = textOf(cur);
         if (/Resets?/i.test(t) && /\d+\s*%/.test(t)) {
-          out.push(cur);
+          // Smallest ancestor containing both tokens.  If this ancestor
+          // contains more than one "Resets", we've walked too far —
+          // it's a multi-row section, not a single row.  Stop without
+          // pushing.
+          const resetCount = (t.match(/Resets?\b/gi) || []).length;
+          if (resetCount === 1) out.push(cur);
           break;
         }
         cur = cur.parentElement;
@@ -507,6 +522,11 @@
     let weeklyCount = 0;
 
     for (const row of rows) {
+      // Skip the Usage credits / spending row (it has "Resets ..." + "%"
+      // text but isn't the same kind of budgeted window).
+      const rowText = textOf(row);
+      if (/\$|\bspent\b|\bcredit/i.test(rowText)) continue;
+
       const kind = classifyRow(row);
       if (!kind) continue;
       const usedPct = parseUsedPct(row);
@@ -628,6 +648,14 @@
     });
     urlObserver.observe(document.documentElement, { childList: true, subtree: true });
     window.addEventListener('popstate', onUrlChange);
+    // Hash-only changes don't fire a DOM mutation, so the observer
+    // above misses claude.ai's new #settings/usage route flips.
+    window.addEventListener('hashchange', () => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        onUrlChange();
+      }
+    });
   }
 
   // ---------- Tab sleep / restore ----------
